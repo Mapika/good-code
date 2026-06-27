@@ -34,8 +34,10 @@ Then interpret the output for the user, holding to this framing:
   improved without trading away correctness signals — but remember style metrics
   alone never decide a winner; correctness and downstream maintainability do.
 
-**Backends:** the script shells out to `lizard` (complexity) and `radon` (Python
-maintainability index) — install with `uv tool install lizard radon` — and to
-`jscpd` via `npx` for duplication. Anything missing degrades to a built-in
-estimate, and the script prints install hints. PATH is auto-extended with
-`~/.local/bin` and `~/go/bin`.
+**Backends:** the script shells out to `lizard` (cross-language complexity), `radon`
+(Python maintainability index), and `ruff` (Python lint tripwire — dead/unused code,
+needless complexity, over-defensive constructs the regex smell scan misses) — install
+all three with `uv tool install lizard radon ruff` — plus `jscpd` via `npx` for
+duplication. Anything missing degrades to a built-in estimate, and the script prints
+install hints. PATH is auto-extended with `~/.local/bin` and `~/go/bin`. The `ruff`
+counts are a descriptive tripwire (Python-only), never a target.

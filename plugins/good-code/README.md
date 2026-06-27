@@ -56,11 +56,11 @@ uv tool install lizard radon         # cross-language complexity + Python MI
 Distilled from clean long-lived OSS backends and the engineering-book canon, then
 adversarially critiqued so every rule teaches *when*, not a direction. Notably the
 "many tiny functions" advice from *Clean Code* was resolved against, in favor of
-Ousterhout's deep modules. The 96 examples were mined per-rule and **source-
-verified**: only pairs whose cited repo URL was fetched and confirmed are tagged
-`sourced` (Flask, httpx, requests, Puppeteer, nodebestpractices, Google
-eng-practices); the rest are honest, idiomatic `synthetic` pairs with no false
-attribution.
+Ousterhout's deep modules. The 116 examples were mined per-rule and **source-
+verified**: 26 are `sourced` — only pairs whose cited URL was fetched and confirmed
+(PEP 8, Google style guides + Eng Practices, refactoring.guru, go.dev, the uber-go
+guide, TypeScript docs, Flask/httpx/requests, and more); the rest are honest,
+idiomatic `synthetic` pairs with no false attribution.
 
 ## Status
 

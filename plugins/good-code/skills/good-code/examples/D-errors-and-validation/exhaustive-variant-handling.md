@@ -107,3 +107,39 @@ func price(t Tier, cents int64) (int64, error) {
 **Why:** Covers the other anti-pattern in 'replaces': a class/interface hierarchy + factory for two fixed cases is heavier and slower than a switch over an enum. The explicit default returning an error (paired with the `exhaustive` linter) is Go's stand-in for `never`, instead of silently defaulting. When-NOT: if pricing strategies were genuinely open and added by other packages without editing this function, the Pricer interface would be the correct, intentional use of polymorphism.
 
 ---
+
+## Exhaustiveness checking with `never` (TypeScript Handbook: Narrowing)  ·  `typescript`  ·  ✅ sourced
+Source: https://www.typescriptlang.org/docs/handbook/2/narrowing.html#exhaustiveness-checking
+
+**Before**
+```typescript
+function getArea(shape: Shape) {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.sideLength ** 2;
+  }
+}
+```
+
+**After**
+```typescript
+function getArea(shape: Shape) {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.sideLength ** 2;
+    default:
+      const _exhaustiveCheck: never = shape;
+      return _exhaustiveCheck;
+  }
+}
+```
+
+**Why:** Demonstrates making variant handling exhaustive: assigning the narrowed `shape` to a `never` in the default branch turns any unhandled union member into a compile-time error (adding `Triangle` to `Shape` then yields 'Type Triangle is not assignable to type never'), instead of silently returning undefined. When NOT to apply: for open/extensible unions where new variants are expected to be ignored by design, a hard `never` check forces edits to every switch and may be undesirable.
+
+_Verified: Fetched https://www.typescriptlang.org/docs/handbook/2/narrowing.html#exhaustiveness-checking and confirmed both code blocks exist verbatim. (1) The Discriminated unions section contains the "before" getArea switch over shape.kind handling only "circle" (return Math.PI * shape.radius ** 2) and "square" (return shape.sideLength ** 2) with no default case. (2) The Exhaustiveness checking section contains the "after" version adding `default: const _exhaustiveCheck: never = shape; return _exhaustiveCheck;`. Both before and after strings in the candidate match the page content exactly, and the surrounding text explains the never-type exhaustiveness pattern (adding a new Shape member produces a type error)._
+
+---

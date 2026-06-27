@@ -95,3 +95,26 @@ func NewEventStore(db *sql.DB) *EventStore { return &EventStore{db: db} }
 **Why:** Idiomatic Go returns concrete types and lets the consumer declare the interface; a one-method Storer with one implementation, handed back from the constructor, adds dispatch and hides nothing. When-NOT: when a real second backend or a genuine test boundary appears, define a small interface at the consumer that needs it — so this guards against both eager interfaces and the opposite 'never abstract' pole.
 
 ---
+
+## Google TypeScript Style Guide: Container classes (don't add a class just for namespacing)  ·  `typescript`  ·  ✅ sourced
+Source: https://google.github.io/styleguide/tsguide.html#container-classes
+
+**Before**
+```typescript
+export class Container {
+  static FOO = 1;
+  static bar() { return 1; }
+}
+```
+
+**After**
+```typescript
+export const FOO = 1;
+export function bar() { return 1; }
+```
+
+**Why:** Wrapping plain constants and functions in a class solely to namespace them adds an abstraction that buys nothing; export the values and functions directly. When NOT: a class is warranted when you actually need instances, encapsulated state, or to implement an interface — not merely to group static members.
+
+_Verified: Fetched https://google.github.io/styleguide/tsguide.html#container-classes. The "Container classes" section states "Do not create container classes with static methods or properties for the sake of namespacing." It shows the disallowed example verbatim: `export class Container { static FOO = 1; static bar() { return 1; } }`, and the recommended replacement verbatim: `export const FOO = 1;` plus `export function bar() { return 1; }`. Both the candidate's `before` and `after` match the page content exactly._
+
+---

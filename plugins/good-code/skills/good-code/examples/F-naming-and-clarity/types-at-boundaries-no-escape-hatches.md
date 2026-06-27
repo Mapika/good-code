@@ -88,3 +88,25 @@ function loadConfig(): Config {
 **Why:** Demonstrates replacing the non-null `!` escape hatch with a real runtime check at the config boundary, where the value genuinely can be absent. When-NOT: at a provably-safe library edge a cast is acceptable if paired with an assertion and a justifying comment; the point is env vars are not that edge, so check them.
 
 ---
+
+## Google TypeScript Style Guide: use `unknown` over `any`  ·  `typescript`  ·  ✅ sourced
+Source: https://google.github.io/styleguide/tsguide.html#any-unknown
+
+**Before**
+```typescript
+const danger: any = value /* result of an arbitrary expression */;
+danger.whoops();  // This access is completely unchecked!
+```
+
+**After**
+```typescript
+// Can assign any value (including null or undefined) into this but cannot
+// use it without narrowing the type or casting.
+const val: unknown = value;
+```
+
+**Why:** Demonstrates not punching an `any` escape hatch through a type boundary: `any` disables all checking so `danger.whoops()` compiles even though it is unsafe, whereas `unknown` accepts any value but forces narrowing/casting before use, keeping the boundary type-safe. When-NOT: the same guide allows `any` in a few legitimate spots (e.g. constructing a partial mock in tests) provided you suppress the lint warning and add a comment explaining why it is safe.
+
+_Verified: Fetched https://google.github.io/styleguide/tsguide.html#any-unknown. The "Using `unknown` over `any`" section is present. The bad example reads exactly: `const danger: any = value /* result of an arbitrary expression */;` followed by `danger.whoops();  // This access is completely unchecked!` — matching the candidate's "before". The good example reads `const val: unknown = value;` — matching the candidate's "after" code. Both the before→after pattern and the `unknown` over `any` section genuinely exist on the page._
+
+---

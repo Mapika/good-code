@@ -116,3 +116,31 @@ function adminUser(u: User) {
 **Why:** The isAdmin/forList flags exist only so two routes (public view vs admin view) reuse one body, forcing per-caller if/else and a loose any return. Splitting into publicUser/adminUser gives each a precise typed shape. when-NOT: if both views must apply the same field-redaction/PII rule that must change together, extract that one rule, not the whole serializer.
 
 ---
+
+## Refactoring.Guru: Inline Method (Python example)  ·  `python`  ·  ✅ sourced
+Source: https://refactoring.guru/inline-method
+
+**Before**
+```python
+class PizzaDelivery:
+    # ...
+    def getRating(self):
+        return 2 if self.moreThanFiveLateDeliveries() else 1
+  
+    def moreThanFiveLateDeliveries(self):
+        return self.numberOfLateDeliveries > 5
+```
+
+**After**
+```python
+class PizzaDelivery:
+  # ...
+  def getRating(self):
+    return 2 if self.numberOfLateDeliveries > 5 else 1
+```
+
+**Why:** When a helper method's body is as clear as (or clearer than) the method itself, the extra method is a needless indirection; inline the body at the call site and delete the method. Demonstrates collapsing an abstraction that isn't pulling its weight. When NOT: the page explicitly warns 'make sure that the method isn't redefined in subclasses' — if it is overridden, polymorphism depends on it, so do not inline.
+
+_Verified: Fetched https://refactoring.guru/inline-method and read the Python code examples. The BEFORE block matches exactly: `class PizzaDelivery:` defining both `def getRating(self): return 2 if self.moreThanFiveLateDeliveries() else 1` and `def moreThanFiveLateDeliveries(self): return self.numberOfLateDeliveries > 5`. The AFTER block matches exactly: `class PizzaDelivery:` with only `def getRating(self): return 2 if self.numberOfLateDeliveries > 5 else 1`, inlining the condition directly and removing the moreThanFiveLateDeliveries() helper. Both the before/after code and the verify_hint pattern (Python tab, helper inlined into getRating and removed) are genuinely present on the page._
+
+---

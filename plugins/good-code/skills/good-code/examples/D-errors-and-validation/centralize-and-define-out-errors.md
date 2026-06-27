@@ -114,3 +114,35 @@ fastify.setErrorHandler((err, req, reply) => {
 **Why:** Demonstrates routing an identical try/catch-log-500 from every handler into a single error boundary, so handlers express only the happy path. When-NOT: the boundary still discriminates NotFound (404) from unexpected (500) and logs once - it does not silence errors or flatten security-relevant failures into a generic success.
 
 ---
+
+## Don't just check errors, handle them gracefully — 'Only handle errors once' (Dave Cheney)  ·  `go`  ·  ✅ sourced
+Source: https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully
+
+**Before**
+```go
+func Write(w io.Writer, buf []byte) error {
+        _, err := w.Write(buf)
+        if err != nil {
+                // annotated error goes to log file
+                log.Println("unable to write:", err)
+
+                // unannotated error returned to caller
+                return err
+        }
+        return nil
+}
+```
+
+**After**
+```go
+func Write(w io.Write, buf []byte) error {
+        _, err := w.Write(buf)
+        return errors.Wrap(err, "write failed")
+}
+```
+
+**Why:** Demonstrates handling each error exactly once in one place: instead of logging at every layer and also returning the raw error (which duplicates log lines and strips context as it bubbles up), wrap once with context and let a single boundary decide. When NOT to apply: something must still handle/log it once at the top level (don't wrap-and-return forever), and when callers match sentinel errors, preserve them with %w/errors.Is rather than opaquely wrapping.
+
+_Verified: Fetched https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully and confirmed the "Only handle errors once" section. The 'before' example matches exactly: func Write(w io.Writer, buf []byte) error { _, err := w.Write(buf); if err != nil { // annotated error goes to log file; log.Println("unable to write:", err); // unannotated error returned to caller; return err }; return nil }. The 'after' example also matches exactly, including the original article's typo `io.Write` (not io.Writer): func Write(w io.Write, buf []byte) error { _, err := w.Write(buf); return errors.Wrap(err, "write failed") }. Surrounding text confirms the "you should only handle errors once" guidance and the duplicate-logging problem. Both code blocks and the noted typo are genuinely present._
+
+---

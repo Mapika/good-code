@@ -114,3 +114,28 @@ func transfer(tx *sql.Tx, from, to Account, cents int64) error {
 **Why:** The before narrates every mechanical step yet never states the one thing that matters - WHY the sort exists. The after drops the narration and replaces it with the invariant (consistent lock ordering to avoid deadlock), which is exactly the kind of load-bearing why-comment the rule says to keep; removing it (the minimalist overcorrection) would lose information no name or signature can carry.
 
 ---
+
+## Google Python Style Guide §3.8.5 — explain intent; never describe the code  ·  `python`  ·  ✅ sourced
+Source: https://google.github.io/styleguide/pyguide.html#385-block-and-inline-comments
+
+**Before**
+```python
+# BAD COMMENT: Now go through the b array and make sure whenever i occurs
+# the next element is i+1
+```
+
+**After**
+```python
+# We use a weighted dictionary search to find out where i is in
+# the array.  We extrapolate position based on the largest num
+# in the array and the array size and then do binary search to
+# get the exact number.
+
+if i & (i-1) == 0:  # True if i is 0 or a power of 2.
+```
+
+**Why:** The guide's BAD example narrates line-by-line what the code does; the GOOD example explains why (the chosen search strategy) and decodes a non-obvious expression ("True if i is 0 or a power of 2"). Demonstrates comment-why-not-what directly. When NOT to apply: self-evident code needs no comment at all — adding a why-comment to trivial code is just clutter.
+
+_Verified: Fetched https://google.github.io/styleguide/pyguide.html#385-block-and-inline-comments and confirmed all claimed content in section 3.8.5 "Block and Inline Comments": (1) the good example "We use a weighted dictionary search to find out where i is in the array." is present; (2) the line "# True if i is 0 or a power of 2." is present; (3) the bad example beginning "# BAD COMMENT: Now go through the b array and make sure whenever i occurs" is present; (4) the instruction "On the other hand, never describe the code." is present. The candidate's before/after fields accurately represent the page content._
+
+---

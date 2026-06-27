@@ -100,3 +100,35 @@ def load_config(client: ObjectGetter, key: str) -> dict:
 **Why:** Shows the Python analog: a small structural Protocol named for the one behavior used, so the real boto3 client and an in-memory fake both satisfy load_config without inheritance. When-NOT: don't add a Protocol when the function is only ever called with the concrete client and never substituted (a plain type hint suffices), and don't list methods the body doesn't call — introduce the seam when a real test double or second backend exists.
 
 ---
+
+## Go Code Review Comments: Interfaces (return concrete types; define interfaces consumer-side)  ·  `go`  ·  ✅ sourced
+Source: https://go.dev/wiki/CodeReviewComments#interfaces
+
+**Before**
+```go
+// DO NOT DO IT!!!
+package producer
+
+type Thinger interface { Thing() bool }
+
+type defaultThinger struct{ … }
+func (t defaultThinger) Thing() bool { … }
+
+func NewThinger() Thinger { return defaultThinger{ … } }
+```
+
+**After**
+```go
+package producer
+
+type Thinger struct{ … }
+func (t Thinger) Thing() bool { … }
+
+func NewThinger() Thinger { return Thinger{ … } }
+```
+
+**Why:** The implementing (producer) package returns a concrete struct instead of pre-declaring an interface 'for mocking'; the interface, if needed, is declared in the consuming package that actually uses it (the page's companion example shows Foo(t Thinger) and a fakeThinger in the consumer's test). This keeps interfaces small and consumer-defined. When NOT: if a realistic call site genuinely needs to abstract over several real implementations, an interface is justified — the guard the page states is 'do not define interfaces before they are used.'
+
+_Verified: Fetched https://go.dev/wiki/CodeReviewComments#interfaces. The "Interfaces" section contains the exact "// DO NOT DO IT!!!" block: package producer; `type Thinger interface { Thing() bool }`; `type defaultThinger struct{ … }`; `func (t defaultThinger) Thing() bool { … }`; `func NewThinger() Thinger { return defaultThinger{ … } }` (producer-side interface). The recommended version matches the candidate's "after": package producer; `type Thinger struct{ … }`; `func (t Thinger) Thing() bool { … }`; `func NewThinger() Thinger { return Thinger{ … } }` (returns the concrete type). Both before and after snippets in the candidate JSON match the live page verbatim, supporting the rule "accept interfaces small and consumer-side."_
+
+---

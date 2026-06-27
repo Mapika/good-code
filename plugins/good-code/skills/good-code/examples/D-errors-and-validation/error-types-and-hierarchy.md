@@ -110,3 +110,30 @@ func GetUser(id string) (*User, error) {
 **Why:** Demonstrates the when-NOT for this rule: Go is error-as-value, so the fix is wrapping with %w plus a sentinel that callers inspect via errors.Is/As - not porting an exception hierarchy into Go. When-NOT: don't flatten the cause with %v or string concatenation (it breaks Is/As), and don't manufacture a custom error-type tree where a wrapped sentinel already lets callers branch.
 
 ---
+
+## Replace Error Code with Exception (Refactoring.Guru)  ·  `python`  ·  ✅ sourced
+Source: https://refactoring.guru/replace-error-code-with-exception
+
+**Before**
+```python
+def withdraw(self, amount):
+    if amount > self.balance:
+        return -1
+    else:
+        self.balance -= amount
+    return 0
+```
+
+**After**
+```python
+def withdraw(self, amount):
+    if amount > self.balance:
+        raise BalanceException()
+    self.balance -= amount
+```
+
+**Why:** Demonstrates replacing a magic numeric error code (-1) that callers can silently ignore with a named exception type (BalanceException), so failures propagate through the exception type/hierarchy and cannot be mistaken for a valid result. When NOT to apply: don't convert expected, routine conditions into exceptions (exceptions are for the exceptional); for normal control flow or hot paths a result/optional value may be clearer and cheaper.
+
+_Verified: Fetched https://refactoring.guru/replace-error-code-with-exception. The Python tab 'before' withdraw method is exactly: `if amount > self.balance: return -1 else: self.balance -= amount` then `return 0` — returns -1 when amount exceeds balance, 0 otherwise. The 'after' version is exactly: `if amount > self.balance: raise BalanceException()` then `self.balance -= amount` — it raises BalanceException() and drops both error-code returns (-1 and 0). This matches the candidate's before/after snippets verbatim and confirms the verify_hint._
+
+---

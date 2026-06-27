@@ -119,3 +119,33 @@ func (r *Repo) GetUser(ctx context.Context, id int64) (User, error) {
 **Why:** The domain User exposes plain Go types and keeps database/sql driver types (sql.NullString/NullTime) and soft-delete columns inside the repo, so callers aren't coupled to the storage layer. When-NOT: an unexported scan helper used only within the data-access package can keep the NullString form; the mapping earns its place only at the exported boundary.
 
 ---
+
+## Refactoring.Guru: Encapsulate Field  ·  `typescript`  ·  ✅ sourced
+Source: https://refactoring.guru/encapsulate-field
+
+**Before**
+```typescript
+class Person {
+  name: string;
+}
+```
+
+**After**
+```typescript
+class Person {
+  private _name: string;
+
+  get name() {
+    return this._name;
+  }
+  setName(arg: string): void {
+    this._name = arg;
+  }
+}
+```
+
+**Why:** Demonstrates hiding internal representation behind a stable boundary: a public mutable field becomes a `private _name` accessed only through a getter/setter, so callers depend on the accessor contract rather than the raw field, letting you add validation or change storage without breaking them. When-NOT: for plain immutable data carriers / DTOs where there is no invariant to protect, wrapping every field in accessors adds ceremony without buying real encapsulation.
+
+_Verified: Fetched https://refactoring.guru/encapsulate-field. The TypeScript tab shows exactly the claimed Before and After. Before: `class Person { name: string; }`. After: `class Person { private _name: string; get name() { return this._name; } setName(arg: string): void { this._name = arg; } }`. This matches the candidate's before/after byte-for-byte and satisfies the verify_hint (private _name field, get name() returning this._name, and setName(arg: string): void). Other language tabs (Java, C#) on the page differ in style but the TypeScript example is genuinely present as described._
+
+---

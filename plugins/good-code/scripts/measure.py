@@ -194,6 +194,33 @@ def radon_mi(files: list[str]) -> dict | None:
     return {"mi_avg": round(sum(scores) / len(scores), 1), "files": len(scores)} if scores else None
 
 
+def ruff_lint(files: list[str]) -> dict | None:
+    """Python-only lint signal (descriptive tripwire): dead/unused code (F), needless
+    complexity (C901), over-defensive/unsimplifiable constructs (SIM), unused args (ARG),
+    awkward returns (RET), basic security smells (S) — things the regex smell scan can't see."""
+    py = [f for f in files if f.endswith(".py")]
+    if not py or not have("ruff"):
+        return None
+    by_cat: dict[str, int] = {}
+    total = 0
+    for chunk in batches(py, ARG_BATCH):
+        # ruff exits 1 when it finds violations and 0 when clean; both emit JSON.
+        rc, out = run(["ruff", "check", "--select", "F,SIM,C901,RET,ARG,S",
+                       "--output-format", "json", "--no-cache", *chunk])
+        if rc not in (0, 1) or not out.strip():
+            continue
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            continue
+        for v in data:
+            m = re.match(r"[A-Z]+", v.get("code") or "?")
+            key = m.group(0) if m else "?"
+            by_cat[key] = by_cat.get(key, 0) + 1
+            total += 1
+    return {"violations": total, "by_rule": dict(sorted(by_cat.items()))}
+
+
 def jscpd_dup(paths: list[str]) -> dict | None:
     if not have("jscpd"):
         return None
@@ -250,12 +277,13 @@ def measure(paths: list[str], do_dup: bool = True) -> dict:
         "size_complexity": lizard_metrics(files),
         "comments": comment_stats(files),
         "maintainability": radon_mi(files),
+        "ruff": ruff_lint(files),
         "duplication": jscpd_dup(paths) if do_dup else None,
         "smells": scan_smells(files),
     }
     # Report a backend as missing only when it is genuinely not installed (via
     # `have`), distinct from "ran but found nothing" — so the hint isn't misleading.
-    needed = [("lizard", True), ("radon", has_py), ("jscpd", do_dup)]
+    needed = [("lizard", True), ("radon", has_py), ("ruff", has_py), ("jscpd", do_dup)]
     result["missing_backends"] = [name for name, required in needed if required and not have(name)]
     return result
 
@@ -272,6 +300,8 @@ def fmt_block(label: str, m: dict) -> str:
     lines.append(f"comments: ratio {c.get('comment_ratio')} ({c.get('comment_lines')} comment / {c.get('code_lines')} code)")
     if m.get("maintainability"):
         lines.append(f"maintainability index (py): {m['maintainability']['mi_avg']}")
+    if m.get("ruff"):
+        lines.append(f"ruff lint (py): {m['ruff']['violations']} violations {m['ruff']['by_rule']}")
     if m.get("duplication"):
         lines.append(f"duplication: {m['duplication']['dup_pct_lines']}% ({m['duplication']['clones']} clones)")
     if m.get("smells"):

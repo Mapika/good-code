@@ -76,3 +76,36 @@ func newUpstreamClient() *http.Client {
 **Why:** Fixes the code instead of explaining it: the opaque 90*1000*1000*1000 nanosecond literal becomes self-documenting via time.Second and a named constant, so the WHAT-comment disappears. When-NOT guard: the retained comment is now a WHY (why 90s), which no name can capture, so it is correctly kept short rather than deleted in pursuit of zero comments.
 
 ---
+
+## Refactoring.guru — Extract Method: replace an explanatory comment with a named function  ·  `typescript`  ·  ✅ sourced
+Source: https://refactoring.guru/extract-method
+
+**Before**
+```typescript
+printOwing(): void {
+  printBanner();
+
+  // Print details.
+  console.log("name: " + name);
+  console.log("amount: " + getOutstanding());
+}
+```
+
+**After**
+```typescript
+printOwing(): void {
+  printBanner();
+  printDetails(getOutstanding());
+}
+
+printDetails(outstanding: number): void {
+  console.log("name: " + name);
+  console.log("amount: " + outstanding);
+}
+```
+
+**Why:** Rather than leaving a `// Print details.` comment to explain a block, the block is extracted into a self-documenting `printDetails()` method so the function name carries the intent and the comment becomes unnecessary. When NOT to apply: don't extract if it adds indirection without clarity, or if the comment captured rationale a name can't convey.
+
+_Verified: I fetched https://refactoring.guru/extract-method via WebFetch. The page's TypeScript Extract Method example matches the candidate exactly. Before code: `printOwing(): void {\n  printBanner();\n\n  // Print details.\n  console.log("name: " + name);\n  console.log("amount: " + getOutstanding());\n}` — it contains the `// Print details.` comment above the two console.log lines as claimed. After code: `printOwing(): void {\n  printBanner();\n  printDetails(getOutstanding());\n}\n\nprintDetails(outstanding: number): void {\n  console.log("name: " + name);\n  console.log("amount: " + outstanding);\n}` — the comment is removed and a `printDetails(outstanding: number): void` method is extracted and called from printOwing(). Both before and after blocks and the verify_hint are fully confirmed._
+
+---

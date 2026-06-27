@@ -85,3 +85,26 @@ func (r *UserRepository) User(id string) (*User, error) {
 **Why:** Removes the Go-specific tells the rule names: the Get- prefix (method becomes User), package/type stutter, and type-suffixed locals (userIDString, errorValue) become idiomatic short locals (r, id, u, err). Guards the opposite pole by matching Go's density norm (very short locals) WITHOUT shrinking the wide-scope exported UserRepository or method name into one-letter soup.
 
 ---
+
+## Google Go Style Guide: variable names proportional to scope (omit redundant type words)  ·  `go`  ·  ✅ sourced
+Source: https://google.github.io/styleguide/go/decisions.html#variable-name-vs-type
+
+**Before**
+```go
+var numUsers int
+var nameString string
+var primaryProject *Project
+```
+
+**After**
+```go
+var users int
+var name string
+var primary *Project
+```
+
+**Why:** Demonstrates the guide's rule that a name's length should be proportional to its scope and inversely proportional to its usage: within a scope where the compiler and usage already make the type obvious, the redundant type word adds nothing, so `numUsers`->`users`, `nameString`->`name`, `primaryProject`->`primary`. When-NOT: the same section says to keep a type-like qualifier when two versions of a value coexist in scope (e.g. an unparsed `ageString` alongside the parsed `age`), and longer names are warranted in large/file-level scopes.
+
+_Verified: Fetched https://google.github.io/styleguide/go/decisions.html#variable-name-vs-type. The "Variable name vs. type" section contains a table mapping "Repetitive Name" to "Better Name" with exactly these three rows: `var numUsers int` -> `var users int`, `var nameString string` -> `var name string`, and `var primaryProject *Project` -> `var primary *Project`. All three match the candidate's before/after pairs verbatim. The "Variable names" section also states: "The general rule of thumb is that the length of a name should be proportional to the size of its scope and inversely proportional to the number of times that it is used within that scope." This confirms both the table mapping and the scope-proportionality claim in verify_hint._
+
+---

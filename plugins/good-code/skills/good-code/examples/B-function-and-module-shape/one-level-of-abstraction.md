@@ -116,3 +116,36 @@ func dispatch(ctx context.Context, e Event) error {
 **Why:** The loop now reads as the policy it is (deliver, back off, retry, then give up) instead of mixing that with request construction, status checks, and body-closing. postJSON is a deep unit that hides all the transport mechanics, and backoff names the exponential-delay decision. Guards the when-NOT: extraction is justified because postJSON hides substantial complexity, not to chase line count; the obvious fmt.Errorf returns stay inline rather than becoming wrapper functions.
 
 ---
+
+## Extract Method (Compose Method) — printOwing  ·  `typescript`  ·  ✅ sourced
+Source: https://refactoring.guru/extract-method
+
+**Before**
+```typescript
+printOwing(): void {
+  printBanner();
+
+  // Print details.
+  console.log("name: " + name);
+  console.log("amount: " + getOutstanding());
+}
+```
+
+**After**
+```typescript
+printOwing(): void {
+  printBanner();
+  printDetails(getOutstanding());
+}
+
+printDetails(outstanding: number): void {
+  console.log("name: " + name);
+  console.log("amount: " + outstanding);
+}
+```
+
+**Why:** Before, printOwing mixes one high-level operation (printBanner()) with low-level console.log printing statements, so the reader jumps between abstraction levels. After, the detail printing is extracted behind printDetails(...), so every line in printOwing is a peer operation at the same level of abstraction. When NOT to do it: do not extract if the new method would just rename a single trivial expression and add no clearer intent — that produces a shallow pass-through, not a cleaner abstraction.
+
+_Verified: Fetched https://refactoring.guru/extract-method successfully. The page hosts the Extract Method refactoring with code tabs for Java, C#, PHP, Python, and TypeScript. The TypeScript tab shows exactly the claimed before/after. BEFORE: printOwing(): void { printBanner(); // Print details. console.log("name: " + name); console.log("amount: " + getOutstanding()); }. AFTER: printOwing(): void { printBanner(); printDetails(getOutstanding()); } and a newly extracted printDetails(outstanding: number): void { console.log("name: " + name); console.log("amount: " + outstanding); }. This matches the candidate before/after verbatim (only a trivial blank-line whitespace difference in the before block). The pattern (inlined detail console.log lines replaced by a call to an extracted printDetails(getOutstanding()) method) is genuinely present and supports the one-level-of-abstraction rule._
+
+---

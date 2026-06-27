@@ -120,3 +120,31 @@ func backoffWithJitter(attempt int, base time.Duration) time.Duration {
 **Why:** Shows the apply side: the jitter math is a non-obvious pure operation (attempt in, duration out) whose revealing name replaces the what-comment and reads independently of the loop. Guards against over-applying - the retry loop with its mutable attempt counter and the one-line c.http.Do call stay inline as a visible sequence; only the pure block that earned a name is pulled out.
 
 ---
+
+## Inline Method — getRating / moreThanFiveLateDeliveries  ·  `python`  ·  ✅ sourced
+Source: https://refactoring.guru/inline-method
+
+**Before**
+```python
+class PizzaDelivery:
+    # ...
+    def getRating(self):
+        return 2 if self.moreThanFiveLateDeliveries() else 1
+
+    def moreThanFiveLateDeliveries(self):
+        return self.numberOfLateDeliveries > 5
+```
+
+**After**
+```python
+class PizzaDelivery:
+    # ...
+    def getRating(self):
+        return 2 if self.numberOfLateDeliveries > 5 else 1
+```
+
+**Why:** The helper moreThanFiveLateDeliveries() is a one-line method whose name says no more than its body (numberOfLateDeliveries > 5), so the split buys indirection without a genuine abstraction. After inlining, the call site is just as readable and the extra method disappears. This is the guard for over-decomposition: split out a function only when the extraction earns a clean, reused, or polymorphic abstraction. When NOT to inline: keep the method if the name documents intent the raw expression hides, if it is called from several places, or if it must be overridden.
+
+_Verified: Fetched https://refactoring.guru/inline-method and located the Python code sample. The 'before' shows class PizzaDelivery with getRating() returning `2 if self.moreThanFiveLateDeliveries() else 1` AND a separate moreThanFiveLateDeliveries() method returning `self.numberOfLateDeliveries > 5`. The 'after' removes the helper and inlines the comparison directly: getRating() returns `2 if self.numberOfLateDeliveries > 5 else 1`. This matches the candidate's before/after byte-for-byte (modulo whitespace), confirming the Inline Method pattern is genuinely present on the page._
+
+---

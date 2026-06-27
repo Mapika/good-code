@@ -119,3 +119,22 @@ func (c *Cache) Get(key string) (Value, bool) {
 **Why:** The before-comment lies: it promises false 'if expired' but the body refreshes the TTL and never returns false for a present entry, so a caller writing expiry handling is misled, a contradicting comment is worse than none. when_NOT guard: the fix updates the doc to match rather than deleting it, godoc on an exported method is the contract and the meaningful sliding-TTL behavior is preserved.
 
 ---
+
+## PEP 8 — Inline Comments: don't write comments that restate the obvious  ·  `python`  ·  ✅ sourced
+Source: https://peps.python.org/pep-0008/#inline-comments
+
+**Before**
+```python
+x = x + 1                 # Increment x
+```
+
+**After**
+```python
+x = x + 1                 # Compensate for border
+```
+
+**Why:** Shows replacing a redundant comment that just duplicates what the code plainly does ("Increment x") with one that adds information the code cannot express ("Compensate for border"). The dont-duplicate-docs aspect: a comment that merely narrates the statement is noise and goes stale. When NOT to apply: keep a comment that records a non-obvious invariant, rationale, or external constraint — only delete comments that restate the obvious.
+
+_Verified: Fetched https://peps.python.org/pep-0008/#inline-comments. The "Inline Comments" section verbatim states "Inline comments are unnecessary and in fact distracting if they state the obvious." It shows the bad example `x = x + 1                 # Increment x` (the candidate's "before") and the useful example `x = x + 1                 # Compensate for border` (the candidate's "after"), with the explanation that the first merely restates the code while the second adds context. All three pieces of verify_hint and the before/after match the live page._
+
+---

@@ -76,3 +76,40 @@ func page(items []Item, pageNum, size int) []Item {
 **Why:** Shows that off-by-one-prone slice bounds are easy to verify when start and end are named locals, instead of two clever min() calls buried in the slice expression. The when_not: a plain items[a:b] needs no such expansion, the fix targets only the bound arithmetic that a reader otherwise has to recompute mentally.
 
 ---
+
+## Refactoring.Guru: Replace Nested Conditional with Guard Clauses  ·  `python`  ·  ✅ sourced
+Source: https://refactoring.guru/replace-nested-conditional-with-guard-clauses
+
+**Before**
+```python
+def getPayAmount(self):
+    if self.isDead:
+        result = deadAmount()
+    else:
+        if self.isSeparated:
+            result = separatedAmount()
+        else:
+            if self.isRetired:
+                result = retiredAmount()
+            else:
+                result = normalPayAmount()
+    return result
+```
+
+**After**
+```python
+def getPayAmount(self):
+    if self.isDead:
+        return deadAmount()
+    if self.isSeparated:
+        return separatedAmount()
+    if self.isRetired:
+        return retiredAmount()
+    return normalPayAmount()
+```
+
+**Why:** Demonstrates clarity over a clever/deeply-nested control structure: the 'arrow' of nested if/else with a mutated `result` temp is flattened into flat early-return guard clauses, so each special case reads linearly. When-NOT: guard clauses suit early exits for special/edge cases; if both branches are equally important normal paths (not exceptional), an if/else better signals their equal weight, so don't force every conditional into guards.
+
+_Verified: Fetched https://refactoring.guru/replace-nested-conditional-with-guard-clauses. The page offers code in 5 languages (Java, C#, PHP, Python, TypeScript). The Python tab shows the Before block as a `getPayAmount(self)` method with nested if/else assigning `result` (deadAmount/separatedAmount/retiredAmount/normalPayAmount) and a final `return result` — matching the candidate's `before` verbatim. The After block flattens it into guard clauses: `if self.isDead: return deadAmount()`, `if self.isSeparated: return separatedAmount()`, `if self.isRetired: return retiredAmount()`, ending with `return normalPayAmount()` — matching the candidate's `after` verbatim. Both before/after and the described pattern are genuinely present on the page's Python tab._
+
+---

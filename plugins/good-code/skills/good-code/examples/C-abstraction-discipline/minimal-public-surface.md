@@ -107,3 +107,38 @@ def load_config(path: str) -> Config:
 **Why:** Uses Python's conventions (leading underscore + `__all__`) to keep a single-use helper out of the module's public surface, signalling callers should not depend on it. When-NOT: load_config stays public (no underscore, listed in __all__) because it is the documented contract other modules import - do not underscore-hide symbols that are genuinely consumed elsewhere.
 
 ---
+
+## Uber Go Style Guide: Avoid Embedding Types in Public Structs  ·  `go`  ·  ✅ sourced
+Source: https://github.com/uber-go/guide/blob/1d60a91aa5e87d443002e23c21903c49489dbde5/style.md#avoid-embedding-types-in-public-structs
+
+**Before**
+```go
+// ConcreteList is a list of entities.
+type ConcreteList struct {
+  *AbstractList
+}
+```
+
+**After**
+```go
+// ConcreteList is a list of entities.
+type ConcreteList struct {
+  list *AbstractList
+}
+
+// Add adds an entity to the list.
+func (l *ConcreteList) Add(e Entity) {
+  l.list.Add(e)
+}
+
+// Remove removes an entity from the list.
+func (l *ConcreteList) Remove(e Entity) {
+  l.list.Remove(e)
+}
+```
+
+**Why:** Embedding *AbstractList promotes the entire embedded method set into ConcreteList's exported API, leaking implementation details and inhibiting type evolution. Replacing the embed with an unexported `list` field plus hand-written delegate methods exposes only the intended surface. When NOT: the guide notes embedding is acceptable for unexported types, or when you deliberately want to promote/forward the full set of methods.
+
+_Verified: Fetched the uber-go/guide style.md at the pinned commit (1d60a91) and located the "Avoid Embedding Types in Public Structs" section. The Bad block contains `type ConcreteList struct { *AbstractList }` embedding the *AbstractList pointer anonymously, exactly as in the candidate's "before". The Good block contains `type ConcreteList struct { list *AbstractList }` with explicit delegate methods `func (l *ConcreteList) Add(e Entity) { l.list.Add(e) }` and `func (l *ConcreteList) Remove(e Entity) { l.list.Remove(e) }`, matching the candidate's "after". The surrounding guidance explains embedding leaks implementation details and inhibits type evolution. The before/after pattern and verify_hint are accurately represented (only trivial doc-comment lines differ)._
+
+---
