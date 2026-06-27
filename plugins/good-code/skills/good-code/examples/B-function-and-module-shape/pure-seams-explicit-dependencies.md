@@ -1,0 +1,102 @@
+# pure-seams-explicit-dependencies
+
+_Theme B: function-and-module-shape_
+
+## totals threaded through self-state instead of returned  ·  `python`  ·  synthetic
+
+**Before**
+```python
+class PriceCalculator:
+    def total(self, items):
+        self.items = items          # stash args as instance state
+        self.subtotal = 0
+        self._sum()                 # mutates self.subtotal
+        self._discount()            # reads/mutates self.subtotal
+        return self.subtotal
+
+    def _sum(self):
+        for i in self.items:
+            self.subtotal += i.price * i.qty
+
+    def _discount(self):
+        if self.subtotal > 100:
+            self.subtotal *= 0.9
+```
+
+**After**
+```python
+def order_total(items: list[Item]) -> float:
+    subtotal = sum(i.price * i.qty for i in items)
+    return subtotal * 0.9 if subtotal > 100 else subtotal
+```
+
+**Why:** Shows the PrimeGenerator tell: helpers take no args and communicate only through self, so they aren't reentrant or independently testable; the fix makes the seam pure (value in, value out). when-NOT: don't read this as 'never hold state' — an object whose state is its purpose (a streaming aggregator, an open buffer) legitimately keeps it.
+
+---
+
+## per-request data stashed on a singleton service  ·  `typescript`  ·  synthetic
+
+**Before**
+```typescript
+class OrderService {
+  private cart!: CartItem[]
+  private userId!: string
+
+  handle(req: OrderRequest): number {
+    this.cart = req.cart            // hide params as instance state
+    this.userId = req.userId
+    return this.computeTotal()      // no args; reads hidden this.cart
+  }
+
+  private computeTotal(): number {
+    // singleton: concurrent requests overwrite this.cart -> wrong totals
+    return this.cart.reduce((sum, i) => sum + i.price * i.qty, 0)
+  }
+}
+```
+
+**After**
+```typescript
+function computeTotal(cart: CartItem[]): number {
+  return cart.reduce((sum, i) => sum + i.price * i.qty, 0)
+}
+
+class OrderService {
+  handle(req: OrderRequest): number {
+    return computeTotal(req.cart)   // dependency explicit; no shared state
+  }
+}
+```
+
+**Why:** Demonstrates that shortening signatures by parking request data on a shared singleton is a real concurrency bug, not just a style nit; the explicit parameter is safe and testable. when-NOT: a per-connection/per-session object (a WebSocket session, an open DB transaction) carrying state is fine — the target is ambient shared-mutable singletons.
+
+---
+
+## package-global counter mutated by a free function  ·  `go`  ·  synthetic
+
+**Before**
+```go
+// package-level mutable state shared by every caller
+var lastID int64
+
+func NextID() int64 {
+    lastID++        // data race under concurrent requests
+    return lastID
+}
+```
+
+**After**
+```go
+type IDSequence struct {
+    n atomic.Int64
+}
+
+// Next is safe for concurrent use; state is owned, not ambient.
+func (s *IDSequence) Next() int64 {
+    return s.n.Add(1)
+}
+```
+
+**Why:** Shows ambient package-global mutation (hidden dependency + data race + untestable) turned into an owned, injectable dependency. when-NOT: the fix is itself stateful — the enemy was the hidden package-level singleton, not statefulness; a struct with a coherent lifecycle is the correct home for that state.
+
+---

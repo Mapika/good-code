@@ -1,0 +1,1176 @@
+{
+  "results": [
+    {
+      "principle_id": "comment-why-not-what",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "webhook handler: narrated lines vs idempotency rationale",
+          "url": "",
+          "before": "def handle_webhook(event):\n    # only handle successful payments\n    if event.type == \"payment_intent.succeeded\":\n        # get the payment intent id\n        pid = event.data.object.id\n        # if we have seen this id, skip it\n        if pid in processed:\n            return\n        # add the id to the processed set\n        processed.add(pid)\n        # fulfill the order\n        fulfill(pid)",
+          "after": "def handle_webhook(event):\n    if event.type != \"payment_intent.succeeded\":\n        return\n    pid = event.data.object.id\n    # Stripe re-delivers webhooks until it gets a 2xx, so the same event can\n    # arrive several times; dedupe on payment_intent id to stay idempotent (PAY-212).\n    if pid in processed:\n        return\n    processed.add(pid)\n    fulfill(pid)",
+          "why": "Demonstrates deleting comments that restate the adjacent line (get the id, add to set, fulfill) while KEEPING the one comment a reader cannot reconstruct from the code: the external-system quirk (Stripe re-delivery) that motivates the dedupe. The when_not is honored - the rationale + ticket link are preserved, not stripped to chase a lower comment count.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "retry backoff: per-line narration vs rate-limit constraint",
+          "url": "",
+          "before": "async function fetchUser(id: string): Promise<User> {\n  // try up to 3 times\n  for (let attempt = 0; attempt < 3; attempt++) {\n    // make the request\n    const res = await fetch(`${BASE}/users/${id}`);\n    // if the response is ok, return the parsed body\n    if (res.ok) return res.json();\n    // wait before retrying\n    await sleep(2 ** attempt * 100);\n  }\n  // throw if all attempts failed\n  throw new Error(`failed to fetch user ${id}`);\n}",
+          "after": "async function fetchUser(id: string): Promise<User> {\n  for (let attempt = 0; attempt < 3; attempt++) {\n    const res = await fetch(`${BASE}/users/${id}`);\n    if (res.ok) return res.json();\n    // Provider 429s under burst load; exponential backoff (100/200/400ms) keeps\n    // us under their 10 req/s cap without a full token bucket.\n    await sleep(2 ** attempt * 100);\n  }\n  throw new Error(`failed to fetch user ${id}`);\n}",
+          "why": "Shows that 'try up to 3 times' / 'make the request' / 'throw if all attempts failed' add nothing the code doesn't already say, whereas the surviving comment encodes an external constraint and the tradeoff (why these specific delays, why not a token bucket). Guards the opposite pole: the non-obvious why is kept, not deleted in the name of terseness.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "transfer lock ordering: narrated steps vs deadlock-avoidance why",
+          "url": "",
+          "before": "func transfer(tx *sql.Tx, from, to Account, cents int64) error {\n\t// put the accounts in a slice\n\taccts := []Account{from, to}\n\t// sort the accounts by id\n\tsort.Slice(accts, func(i, j int) bool { return accts[i].ID < accts[j].ID })\n\t// loop over the accounts\n\tfor _, a := range accts {\n\t\t// lock the account row\n\t\tif err := lockRow(tx, a.ID); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn applyTransfer(tx, from, to, cents)\n}",
+          "after": "func transfer(tx *sql.Tx, from, to Account, cents int64) error {\n\t// Lock rows in ascending id order: two opposite-direction transfers would\n\t// otherwise grab the same two locks in reverse and deadlock.\n\taccts := []Account{from, to}\n\tsort.Slice(accts, func(i, j int) bool { return accts[i].ID < accts[j].ID })\n\tfor _, a := range accts {\n\t\tif err := lockRow(tx, a.ID); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn applyTransfer(tx, from, to, cents)\n}",
+          "why": "The before narrates every mechanical step yet never states the one thing that matters - WHY the sort exists. The after drops the narration and replaces it with the invariant (consistent lock ordering to avoid deadlock), which is exactly the kind of load-bearing why-comment the rule says to keep; removing it (the minimalist overcorrection) would lose information no name or signature can carry.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"comment-why-not-what\"): comment the WHY not the WHAT, delete comments that restate the adjacent line, but keep load-bearing rationale/intent/constraint/invariant comments (contested=true, eval penalizes BOTH poles). All three pairs are kind=synthetic: realistic backend scenarios (Stripe webhook idempotency, API retry/rate-limit, DB transfer lock ordering), each removing line-by-line narration tied to the \"replaces\" anti-pattern while preserving exactly one comment that encodes non-recoverable info (external-system quirk, rate-limit tradeoff, deadlock-avoidance invariant) to model the when_not guard. Tagged synthetic rather than sourced deliberately: real \"removed redundant comments\" diffs with verifiable commit/line anchors are hard to honestly pin down, and the honesty rules favor synthetic over uncertain citations. Coverage spans python/typescript/go. The Python pair also incidentally applies a guard-clause early return; the load-bearing change to focus on is the comment delta. No web sourcing was performed."
+    },
+    {
+      "principle_id": "fix-code-instead-of-explaining-it",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "paraphrase comment on a settlement eligibility check",
+          "url": "",
+          "before": "def settle(order):\n    # check paid is true, refunded is false, and 7 days elapsed since shipping\n    if order.paid and not order.refunded and (now() - order.shipped_at).days > 7:\n        release_funds(order)",
+          "after": "RETURN_WINDOW_DAYS = 7  # chargeback window per merchant agreement (FIN-204)\n\ndef settle(order):\n    return_window_passed = (now() - order.shipped_at).days > RETURN_WINDOW_DAYS\n    eligible_for_release = order.paid and not order.refunded and return_window_passed\n    if eligible_for_release:\n        release_funds(order)",
+          "why": "Turns a WHAT-paraphrase comment into named explaining variables plus a named constant, so the eligibility rule reads in domain terms with no comment needed. When-NOT guard: don't manufacture a single-use helper or hoist a truly self-evident one-off value just to kill a comment; and the genuine WHY behind the 7 days (why this window exists) is information the code can't carry, so it stays as a short why-comment/ticket link on the constant.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "magic page-size duplicated with a math paraphrase comment",
+          "url": "",
+          "before": "function listUsers(req: Request) {\n  // skip (page-1)*50 rows, then return 50 per page\n  const offset = (Number(req.query.page) - 1) * 50;\n  return db.users.findMany({ skip: offset, take: 50 });\n}",
+          "after": "const PAGE_SIZE = 50;\n\nfunction listUsers(req: Request) {\n  const page = Number(req.query.page);\n  const offset = (page - 1) * PAGE_SIZE;\n  return db.users.findMany({ skip: offset, take: PAGE_SIZE });\n}",
+          "why": "Replaces a comment that just narrates the offset arithmetic with a named constant, which also removes the duplicated literal 50 so the meaning is self-documenting. When-NOT guard: naming is warranted here because the value recurs and the comment only restated mechanics; a single, obvious, one-off literal would not need a constant, and a genuinely tricky pagination edge (off-by-one cursor logic) would still earn a short clarifying comment.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "cryptic nanosecond timeout literal with a what-comment",
+          "url": "",
+          "before": "func newUpstreamClient() *http.Client {\n    // 90 second timeout for the slow batch upstream\n    return &http.Client{Timeout: 90 * 1000 * 1000 * 1000}\n}",
+          "after": "// Batch upstream can take ~1m under load; allow margin (see RUNBOOK-12).\nconst upstreamTimeout = 90 * time.Second\n\nfunc newUpstreamClient() *http.Client {\n    return &http.Client{Timeout: upstreamTimeout}\n}",
+          "why": "Fixes the code instead of explaining it: the opaque 90*1000*1000*1000 nanosecond literal becomes self-documenting via time.Second and a named constant, so the WHAT-comment disappears. When-NOT guard: the retained comment is now a WHY (why 90s), which no name can capture, so it is correctly kept short rather than deleted in pursuit of zero comments.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (kind=\"synthetic\", empty url) \u2014 I did not find line-anchored public diffs that specifically show \"delete paraphrase comment -> introduce name\" with verifiable permalinks, and honesty rules favor synthetic over shaky citations. Examples are deliberately distinct from the ruleset's own before/after (the `# 30 days in seconds` Python case) to add coverage: Python = explaining variables + named constant for a boolean rule; TypeScript = named constant removing a math-paraphrase comment and a duplicated literal; Go = replacing an opaque nanosecond literal with time.Second + named constant. Each \"why\" explicitly models the when_not pole: keep a short comment for a real WHY or genuinely irreducible logic, and don't invent single-use indirection (helpers/constants for trivial one-offs) just to delete a comment. Corpus now spans python/typescript/go for this principle."
+    },
+    {
+      "principle_id": "document-public-contract",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "sourced",
+          "title": "send_from_directory documents the security precondition, not the body",
+          "url": "https://raw.githubusercontent.com/pallets/flask/main/src/flask/helpers.py",
+          "before": "def send_from_directory(directory, path, **kwargs):\n    # joins directory and path, then calls send_file on the result\n    return send_file(safe_join(directory, path), **kwargs)",
+          "after": "def send_from_directory(\n    directory: os.PathLike[str] | str,\n    path: os.PathLike[str] | str,\n    **kwargs: t.Any,\n) -> Response:\n    \"\"\"Send a file from within a directory using :func:`send_file`.\n\n    This is a secure way to serve files from a folder, such as static\n    files or uploads. Uses :func:`~werkzeug.security.safe_join` to\n    ensure the path coming from the client is not maliciously crafted to\n    point outside the specified directory.\n    \"\"\"\n    ...",
+          "why": "The real Flask contract tells a caller the one thing they cannot see from the signature: this path is client-safe (uses safe_join), whereas send_file is not. The bad version wastes its comment narrating the body (join + call send_file) and omits the precondition. when_NOT: it deliberately stays at caller altitude and does not re-explain the joining algorithm, and a one-line private helper would get no docstring at all.",
+          "verify_hint": "Only the AFTER is real Flask source. Fetch the URL and confirm send_from_directory has signature (directory, path, **kwargs) -> Response and a docstring beginning 'Send a file from within a directory using :func:`send_file`.' followed by the paragraph about safe_join preventing paths 'maliciously crafted to point outside the specified directory.' The BEFORE is an illustrative undocumented version, not repo content.",
+          "verify_note": "Fetched the raw Flask source. send_from_directory has the exact signature def send_from_directory(directory: os.PathLike[str] | str, path: os.PathLike[str] | str, **kwargs: t.Any) -> Response, and the docstring begins 'Send a file from within a directory using :func:`send_file`.' and includes the safe_join text ensuring the path is not 'maliciously crafted to point outside the specified directory.' The AFTER matches verbatim; BEFORE is correctly noted as illustrative."
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "retry wrapper: TSDoc states throws + non-retry behavior",
+          "url": "",
+          "before": "// Loops up to maxAttempts times, calls fetch, sleeps with exponential\n// backoff between tries, then parses and returns the JSON body.\nexport async function getJson(url: string, maxAttempts: number): Promise<any> {\n  // ...\n}",
+          "after": "/**\n * GET a JSON resource, retrying transient network and 5xx failures.\n *\n * @param url Absolute URL to fetch.\n * @param opts.maxAttempts Total attempts including the first (default 3).\n * @returns The decoded body of the first 2xx response.\n * @throws {HttpError} on a 4xx (not retried) or after all attempts fail.\n */\nexport async function getJson<T>(\n  url: string,\n  opts?: { maxAttempts?: number },\n): Promise<T> {\n  // ...\n}",
+          "why": "The contract surfaces what a caller must know but cannot infer: 4xx is NOT retried, the default attempt count, and the typed throw. The bad version uses `any`, re-narrates the backoff loop, and hides the throw behavior. when_NOT: the doc omits the backoff formula (implementation detail) rather than expanding it, so it documents the boundary without restating the body.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "godoc states blocking, error, and concurrency contract",
+          "url": "",
+          "before": "// Acquire loops checking the bucket's tokens, sleeps until one frees up,\n// then decrements the counter and returns nil.\nfunc (l *Limiter) Acquire(ctx context.Context) error {\n\t// ...\n}",
+          "after": "// Acquire blocks until a rate-limit token is available or ctx is done.\n// It returns ctx.Err() if the context is canceled or its deadline passes\n// before a token is granted, and nil once a token has been consumed.\n// Acquire is safe for concurrent use by multiple goroutines.\nfunc (l *Limiter) Acquire(ctx context.Context) error {\n\t// ...\n}",
+          "why": "Follows godoc convention (comment starts with the symbol name) and documents the three things a caller needs: it blocks, it returns ctx.Err() on cancellation, and it is goroutine-safe. The bad comment narrates the token-bucket loop instead. when_NOT: the contract omits the bucket-refill mechanics, and an unexported helper like refill() would need no such comment.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec from ruleset.json (id=document-public-contract): document the caller-facing contract of boundary-crossing symbols (params, return, side effects, errors, preconditions, units, concurrency, zero-value) so a caller need not read the body; keep implementation detail out; use host convention; skip on trivial private helpers. The 'replaces' anti-pattern has two poles, both covered: (a) skipping the contract entirely, and (b) a doc that re-narrates the loop body or restates the signature's types.\\n\\nCoverage: all three languages. One sourced (python, Flask helpers.py), two synthetic (ts, go).\\n\\nSourced honesty note: in the Python pair ONLY the AFTER is real Flask source (verified via the raw URL this session: signature `send_from_directory(directory, path, **kwargs) -> Response` and the docstring's safe_join security paragraph are verbatim; body shown as `...` to avoid attributing a body I did not copy). The BEFORE is an illustrative undocumented version I wrote and is NOT attributed to the repo. URL is the moving `main` branch but the send_from_directory docstring has been stable for years; a verifier can confirm it there.\\n\\nEach 'why' guards the when_not pole (appropriate expressiveness, not minimalism): the good versions document boundary facts a caller cannot infer while deliberately omitting algorithm/implementation detail, and each notes that a trivial private helper would not warrant a doc comment.\\n\\nTS and Go pairs are synthetic but idiomatic (TSDoc @param/@returns/@throws; godoc comment beginning with the symbol name) and use realistic backend scenarios (retry/HTTP client, rate limiter) drawn from the brief's suggested domains."
+    },
+    {
+      "principle_id": "keep-comments-true-and-dont-duplicate-docs",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "sourced",
+          "title": "sibling HTTP verb re-copies request()'s whole param block",
+          "url": "https://github.com/encode/httpx/blob/master/httpx/_api.py",
+          "before": "def get(\n    url: URL | str,\n    *,\n    params: QueryParamTypes | None = None,\n    headers: HeaderTypes | None = None,\n    cookies: CookieTypes | None = None,\n    timeout: TimeoutTypes = DEFAULT_TIMEOUT_CONFIG,\n) -> Response:\n    \"\"\"\n    Sends a `GET` request.\n\n    Parameters:\n      url: URL for the new Request object.\n      params: (optional) Query parameters to include in the URL.\n      headers: (optional) Dictionary of HTTP headers to send.\n      cookies: (optional) Dictionary of cookies to send.\n      timeout: (optional) The timeout configuration to use.\n    \"\"\"  # full block copied from request(); drifts when request() changes\n    ...",
+          "after": "def get(\n    url: URL | str,\n    *,\n    params: QueryParamTypes | None = None,\n    headers: HeaderTypes | None = None,\n    cookies: CookieTypes | None = None,\n    timeout: TimeoutTypes = DEFAULT_TIMEOUT_CONFIG,\n) -> Response:\n    \"\"\"\n    Sends a `GET` request.\n\n    **Parameters**: See `httpx.request`.\n\n    Note that the `data`, `files`, `json` and `content` parameters are not available\n    on this function, as `GET` requests should not include a request body.\n    \"\"\"\n    ...",
+          "why": "Documents the param set once on canonical request() and points the verb wrapper to it instead of re-copying a block that silently drifts. when_NOT guard: it does NOT strip everything to chase minimalism, it keeps the load-bearing prose the signature cannot state (which body params are intentionally absent for GET).",
+          "verify_hint": "Confirm httpx's get() (and siblings post/put/delete) carry the short docstring 'Sends a `GET` request.' followed by '**Parameters**: See `httpx.request`.' plus the note that data/files/json/content are unavailable, rather than an inline copy of request()'s parameter list.",
+          "verify_note": "Fetched https://github.com/encode/httpx/blob/master/httpx/_api.py. The get() function's docstring matches the 'after' snippet exactly: \"Sends a `GET` request.\\n\\n**Parameters**: See `httpx.request`.\\n\\nNote that the `data`, `files`, `json` and `content` parameters are not available on this function, as `GET` requests should not include a request body.\" Sibling functions (post/put/patch/delete) follow the same concise reference pattern rather than inlining request()'s full parameter list. The 'before' is the expected synthetic anti-pattern illustration."
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "TSDoc restates the types the signature already declares",
+          "url": "",
+          "before": "/**\n * Fetch a user by id.\n * @param {string} id - a string user id\n * @param {number} timeoutMs - a number, the timeout\n * @returns {Promise<User>} a promise that resolves to a User\n */\nasync function getUser(id: string, timeoutMs: number): Promise<User> {\n  return client.get(`/users/${id}`, { timeoutMs })\n}",
+          "after": "/**\n * Fetch a user by id.\n * @param timeoutMs - per-request budget; the call rejects with `TimeoutError` once exceeded.\n */\nasync function getUser(id: string, timeoutMs: number): Promise<User> {\n  return client.get(`/users/${id}`, { timeoutMs })\n}",
+          "why": "In typed code the `{string}`/`{number}`/`{Promise<User>}` tags and 'a string'/'a number' prose duplicate machine-checkable facts and rot when the signature changes; the type carries the type. when_NOT guard: it keeps the one fact the type can't express (timeout semantics: rejection on exceed) and omits a doc for the self-explanatory `id` rather than blanket-deleting all prose.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "godoc claims an expiry behavior the code no longer has",
+          "url": "",
+          "before": "// Get returns the cached value for key.\n// Returns false if the key is missing or has expired.\nfunc (c *Cache) Get(key string) (Value, bool) {\n\te, ok := c.entries[key]\n\tif !ok {\n\t\treturn Value{}, false\n\t}\n\te.expires = time.Now().Add(c.ttl) // sliding TTL: extend on read\n\treturn e.val, true\n}",
+          "after": "// Get returns the cached value for key and true, extending the entry's TTL on\n// access (sliding expiration). It returns the zero Value and false only when key\n// is absent; a present entry is never reported as expired here.\nfunc (c *Cache) Get(key string) (Value, bool) {\n\te, ok := c.entries[key]\n\tif !ok {\n\t\treturn Value{}, false\n\t}\n\te.expires = time.Now().Add(c.ttl) // sliding TTL: extend on read\n\treturn e.val, true\n}",
+          "why": "The before-comment lies: it promises false 'if expired' but the body refreshes the TTL and never returns false for a present entry, so a caller writing expiry handling is misled, a contradicting comment is worse than none. when_NOT guard: the fix updates the doc to match rather than deleting it, godoc on an exported method is the contract and the meaningful sliding-TTL behavior is preserved.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id keep-comments-true-and-dont-duplicate-docs). The rule has two halves: (1) keep comments TRUE to the code, and (2) don't duplicate machine-checkable facts / re-copy param blocks across siblings. Examples cover both: python+typescript hit the duplication half, go hits the stale/contradicting half. Languages: python, typescript, go (full corpus coverage).\n\nPython example is kind=sourced: the AFTER side is verbatim from httpx _api.py (verified live via WebFetch of https://raw.githubusercontent.com/encode/httpx/master/httpx/_api.py on 2026-06-27 \u2014 get() docstring reads 'Sends a `GET` request.' then '**Parameters**: See `httpx.request`.' plus the note about data/files/json/content). The BEFORE side is a reconstruction of the anti-pattern httpx deliberately avoids (a re-copied param block); the verify_hint targets the real AFTER text. Permalink given as the blob URL on master (master is stable for this long-standing docstring; the raw URL is the one actually fetched and is equivalent).\n\nTypeScript and Go examples are kind=synthetic (idiomatic illustrations, not attributed to any repo). Each why states the rule AND its when_not pole so the pairs model appropriate expressiveness, not minimalism (keep units/semantics/contract prose; only drop what the types already say or what has gone stale)."
+    },
+    {
+      "principle_id": "size-follows-cohesion",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "CSV import row split into single-use trampolines",
+          "url": "",
+          "before": "def import_user(row):\n    user = _build_user(row)\n    _persist(user)\n    return _summary(user)\n\ndef _build_user(row):\n    return User(name=row[0], email=row[1])\n\ndef _persist(user):\n    db.session.add(user)\n    db.session.commit()\n\ndef _summary(user):\n    return f\"imported {user.email}\"",
+          "after": "def import_user(row):\n    user = User(name=row[0], email=row[1])\n    db.session.add(user)\n    db.session.commit()\n    return f\"imported {user.email}\"",
+          "why": "Shows length following cohesion: three one-line helpers each called exactly once chop a linear flow into trampolines that add navigation cost while naming no reusable abstraction; inlining yields one coherent 5-line unit. When-NOT guard: this is not license to cram unrelated concerns together \u2014 if _persist grew retry/transaction logic or gained a second caller, or the body started mixing auth + parsing + emailing, separation would again be warranted.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "Health handler fragmented into trivial helpers",
+          "url": "",
+          "before": "func handleHealth(w http.ResponseWriter, r *http.Request) {\n    status := buildStatus()\n    writeStatus(w, status)\n}\n\nfunc buildStatus() map[string]string {\n    return map[string]string{\"status\": \"ok\"}\n}\n\nfunc writeStatus(w http.ResponseWriter, status map[string]string) {\n    w.Header().Set(\"Content-Type\", \"application/json\")\n    json.NewEncoder(w).Encode(status)\n}",
+          "after": "func handleHealth(w http.ResponseWriter, r *http.Request) {\n    w.Header().Set(\"Content-Type\", \"application/json\")\n    json.NewEncoder(w).Encode(map[string]string{\"status\": \"ok\"})\n}",
+          "why": "Idiomatic-Go form of tiny-function disease: each helper is single-use and hides nothing, so the interface cost exceeds the body; inlining lets the handler read as one cohesive unit. When-NOT guard: the tell is single-use AND trivial \u2014 keep a writeJSON helper the moment several handlers reuse it, or when a helper encapsulates real logic (validation, error mapping); this is not an excuse to merge genuinely distinct concerns into one func.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "Order endpoint mixing pricing, DB, payment, and HTTP",
+          "url": "",
+          "before": "async function createOrder(req: Request, res: Response) {\n  const items = req.body.items;\n  let subtotal = 0;\n  for (const it of items) subtotal += it.price * it.qty;\n  const tax = subtotal * 0.2;\n  const total = subtotal + tax;\n  const row = await db.query(\n    \"INSERT INTO orders(total) VALUES($1) RETURNING id\", [total]);\n  await stripe.charges.create({\n    amount: Math.round(total * 100), source: req.body.token });\n  res.json({ id: row.rows[0].id, total });\n}",
+          "after": "async function createOrder(req: Request, res: Response) {\n  const total = priceOrder(req.body.items);\n  const id = await saveOrder(total);          // thin DB I/O wrapper\n  await chargeCard(req.body.token, total);    // thin payment I/O wrapper\n  res.json({ id, total });\n}\n\nfunction priceOrder(items: Item[]): number {\n  const subtotal = items.reduce((s, it) => s + it.price * it.qty, 0);\n  return subtotal + subtotal * TAX_RATE;\n}",
+          "why": "The opposite pole: the before is a god-function blending domain pricing, DB I/O, payment I/O, and HTTP at three altitudes, so the split is driven by mixed concerns/cohesion \u2014 not by counting lines. priceOrder is a genuine independent abstraction (pure, testable, reusable). When-NOT guard: do not over-correct into trampolines \u2014 a cohesive 40-line handler doing one thing should NOT be chopped to hit a size limit, and the extracted piece must earn its name rather than just forwarding one obvious line.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (idiomatic, illustrative) \u2014 chosen over any sourced citation because I could not verify an exact line-anchored public diff that merges/splits functions by cohesion, and the honesty rules make synthetic the correct call. Coverage spans Python, TypeScript, and Go. Two examples (Python, Go) target the dominant LLM tell this rule fixes \u2014 tiny-function disease, where a linear flow is fragmented into single-use trampoline helpers to satisfy a 2-4 line target (the Clean Code anti-pattern named in `replaces`). The third (TypeScript) deliberately models the opposite pole \u2014 the god-function dumping ground mixing parsing/domain/I/O/transport \u2014 so the corpus teaches that the trigger for both merging and splitting is cohesion, not line count. Every `why` includes an explicit when-NOT clause guarding the opposite failure (don't merge unrelated concerns; keep reused/logic-bearing helpers; don't chop cohesive functions to hit a limit), per the brief's appropriate-expressiveness framing. All before/after sides are within the 5-20 line guideline and self-contained."
+    },
+    {
+      "principle_id": "split-only-for-clean-abstraction",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "conjoined self-state methods -> pure pipeline",
+          "url": "",
+          "before": "class CheckoutHandler:\n    def handle(self, req):\n        self._parse(req)    # sets self.cart\n        self._price()       # reads self.cart, sets self.total\n        self._charge()      # reads self.total, sets self.receipt\n        return self.receipt\n\n    def _parse(self, req):\n        self.cart = [Item(**i) for i in req[\"items\"]]\n\n    def _price(self):\n        self.total = sum(i.qty * i.unit_price for i in self.cart)\n\n    def _charge(self):\n        self.receipt = gateway.charge(self.total)",
+          "after": "def handle(req):\n    cart = parse_cart(req)\n    total = price(cart)\n    return charge(total)\n\ndef parse_cart(req):\n    return [Item(**i) for i in req[\"items\"]]\n\ndef price(cart):\n    return sum(i.qty * i.unit_price for i in cart)\n\ndef charge(total):\n    return gateway.charge(total)",
+          "why": "Shows the right fix for conjoined helpers that communicate only through mutable self-state and a fixed call order: turn each into a pure value-in/value-out step so it's understandable without the parent. Guards the opposite pole - if these three genuinely co-mutated one buffer in lockstep and couldn't return values, you would inline them as a visible sequence rather than fake-extract.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "over-extracted passthrough helpers -> inline visible sequence",
+          "url": "",
+          "before": "class WebhookProcessor {\n  private event!: StripeEvent;\n  private order!: Order;\n\n  process(raw: string): Order {\n    this.decode(raw);\n    this.loadOrder();\n    this.markPaid();\n    return this.order;\n  }\n  private decode(raw: string) { this.event = JSON.parse(raw); }\n  private loadOrder() { this.order = db.orders.find(this.event.orderId); }\n  private markPaid() { this.order.status = \"paid\"; db.orders.save(this.order); }\n}",
+          "after": "function processWebhook(raw: string): Order {\n  const event: StripeEvent = JSON.parse(raw);\n  const order = db.orders.find(event.orderId);\n  order.status = \"paid\";\n  db.orders.save(order);\n  return order;\n}",
+          "why": "Demonstrates collapsing single-use trampolines that scatter a 4-line linear flow across methods threading state through fields, forcing the reader to flip back and forth. Guards the opposite pole - if decode had to verify a signature and parse (a non-trivial pure op reused elsewhere), keeping it as verifyAndParse(raw) would be the correct extraction.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "extract a warranted non-obvious pure operation",
+          "url": "",
+          "before": "func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {\n    for attempt := 0; attempt < c.maxRetries; attempt++ {\n        resp, err := c.http.Do(req)\n        if err == nil && resp.StatusCode < 500 {\n            return resp, nil\n        }\n        // exponential backoff with full jitter, capped at 30s\n        capped := math.Min(float64(c.base)*math.Pow(2, float64(attempt)), float64(30*time.Second))\n        time.Sleep(time.Duration(rand.Int63n(int64(capped))))\n    }\n    return nil, fmt.Errorf(\"exhausted %d retries\", c.maxRetries)\n}",
+          "after": "func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {\n    for attempt := 0; attempt < c.maxRetries; attempt++ {\n        resp, err := c.http.Do(req)\n        if err == nil && resp.StatusCode < 500 {\n            return resp, nil\n        }\n        time.Sleep(backoffWithJitter(attempt, c.base))\n    }\n    return nil, fmt.Errorf(\"exhausted %d retries\", c.maxRetries)\n}\n\n// backoffWithJitter returns a randomized exponential delay capped at 30s.\nfunc backoffWithJitter(attempt int, base time.Duration) time.Duration {\n    capped := math.Min(float64(base)*math.Pow(2, float64(attempt)), float64(30*time.Second))\n    return time.Duration(rand.Int63n(int64(capped)))\n}",
+          "why": "Shows the apply side: the jitter math is a non-obvious pure operation (attempt in, duration out) whose revealing name replaces the what-comment and reads independently of the loop. Guards against over-applying - the retry loop with its mutable attempt counter and the one-line c.http.Do call stay inline as a visible sequence; only the pure block that earned a name is pulled out.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (id split-only-for-clean-abstraction; canonical before/after: self._parse/_validate/_apply -> x=parse(req);y=validate(x);return apply(y)). All three pairs are synthetic illustrative code (refactoring-judgment rule; no verifiable real diff matched precisely enough to cite honestly). Corpus covers python/typescript/go and both poles: Py converts conjoined self-state into a pure pipeline (extract done right); TS collapses over-extracted single-use passthrough helpers back inline (the 'extract till you drop' anti-pattern from replaces); Go extracts a genuinely warranted pure named op while keeping threaded loop state inline. Each why names the when_not guard so the examples model appropriate expressiveness rather than blunt inlining or blunt extraction."
+    },
+    {
+      "principle_id": "deep-modules-no-passthrough",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "sourced",
+          "title": "passthrough variable threaded through a constructor",
+          "url": "https://github.com/puppeteer/puppeteer/pull/5826/files#diff-Target.ts",
+          "before": "import { TaskQueue } from './TaskQueue';\n\nexport class Target {\n  _screenshotTaskQueue: TaskQueue;\n  constructor(\n    targetInfo: TargetInfo,\n    browserContext: BrowserContext,\n    sessionFactory: () => Promise<CDPSession>,\n    ignoreHTTPSErrors: boolean,\n    defaultViewport: Viewport | null,\n    screenshotTaskQueue: TaskQueue,   // Target never uses it; only forwards it\n  ) {\n    this._screenshotTaskQueue = screenshotTaskQueue;\n  }\n  // ...page creation forwards it on:\n  // Page.create(client, this, this._ignoreHTTPSErrors,\n  //             this._defaultViewport, this._screenshotTaskQueue);\n}",
+          "after": "export class Target {\n  constructor(\n    targetInfo: TargetInfo,\n    browserContext: BrowserContext,\n    sessionFactory: () => Promise<CDPSession>,\n    ignoreHTTPSErrors: boolean,\n    defaultViewport: Viewport | null,\n  ) {}\n  // Page now owns its own screenshot queue, so Target no longer\n  // accepts, stores, or forwards it:\n  // Page.create(client, this, this._ignoreHTTPSErrors, this._defaultViewport);\n}",
+          "why": "Real puppeteer refactor deleting a pass-through variable: Target accepted, stored, and forwarded screenshotTaskQueue purely to hand it to Page, hiding nothing while widening every signature on the path. When-NOT: if Target actually used the queue (e.g. to serialize screenshots across its pages) the parameter would earn its place \u2014 only delete a dependency a layer genuinely consumes, not one it transforms or owns.",
+          "verify_hint": "At the PR files diff, confirm src/Target.ts removed the `screenshotTaskQueue: TaskQueue` constructor parameter, removed the `_screenshotTaskQueue` field and its `this._screenshotTaskQueue = screenshotTaskQueue` assignment, and dropped `this._screenshotTaskQueue` from the `Page.create(...)` call (it was forwarded, never used by Target). The TaskQueue import is also removed; src/TaskQueue.ts is deleted.",
+          "verify_note": "Fetched puppeteer PR #5826 patch (via 5826.patch and patch-diff raw .diff). The src/Target.ts diff shows: import { TaskQueue } from './TaskQueue'; removed; the _screenshotTaskQueue: TaskQueue field declaration removed; the screenshotTaskQueue: TaskQueue constructor parameter removed; the this._screenshotTaskQueue = screenshotTaskQueue assignment removed; and the this._screenshotTaskQueue argument dropped from the Page.create(...) call (Page.create now ends at this._defaultViewport). src/TaskQueue.ts is deleted ('delete mode 100644 src/TaskQueue.ts', -34 lines). The task queue moved into src/Page.ts as an inline ScreenshotTaskQueue, so Target indeed only forwarded it and never used it. before/after snippets accurately represent the actual change."
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "ceremonial service wrapping a repository 1:1",
+          "url": "",
+          "before": "class InvoiceService:\n    def __init__(self, repo: InvoiceRepository):\n        self._repo = repo\n\n    def get_invoice(self, invoice_id: str) -> Invoice:\n        return self._repo.get_invoice(invoice_id)\n\n    def list_invoices(self, customer_id: str) -> list[Invoice]:\n        return self._repo.list_invoices(customer_id)\n\n    def delete_invoice(self, invoice_id: str) -> None:\n        return self._repo.delete_invoice(invoice_id)",
+          "after": "# Plain reads/deletes call the repository directly \u2014 no wrapper earns its keep.\n# Keep a service method only where it adds real behavior:\nclass InvoiceService:\n    def __init__(self, repo: InvoiceRepository, audit: AuditLog):\n        self._repo = repo\n        self._audit = audit\n\n    def void_invoice(self, invoice_id: str, reason: str) -> Invoice:\n        with self._repo.transaction():\n            invoice = self._repo.get_invoice(invoice_id)\n            invoice.mark_void(reason)\n            self._repo.save(invoice)\n            self._audit.record(\"invoice.void\", invoice_id, reason)\n        return invoice",
+          "why": "Demonstrates collapsing a shallow service whose interface mirrors the repo method-for-method and hides no complexity (classitis / middle-man); callers should use the repo directly for trivial forwards. When-NOT: the kept `void_invoice` shows the layer is justified the moment it does real work \u2014 wrapping the mutation in a transaction, applying a domain state change, and writing an audit record. Thinness, not layer count, is the test; do not delete a layer that adds authz/transactions/mapping.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "single-impl interface 'for mocking' plus forwarding service",
+          "url": "",
+          "before": "// Interface defined on the implementer side purely \"for mocking\",\n// with one production implementation and a service that just forwards.\ntype UserStore interface {\n    GetUser(ctx context.Context, id string) (*User, error)\n}\n\ntype UserService struct{ store UserStore }\n\nfunc (s *UserService) GetUser(ctx context.Context, id string) (*User, error) {\n    return s.store.GetUser(ctx, id) // adds nothing\n}",
+          "after": "// No speculative interface, no forwarding layer: handlers use the concrete\n// repo, whose method is itself deep (tiny signature hiding the SQL).\ntype UserRepo struct{ db *sql.DB }\n\nfunc (r *UserRepo) GetUser(ctx context.Context, id string) (*User, error) {\n    var u User\n    err := r.db.QueryRowContext(ctx,\n        \"SELECT id, email FROM users WHERE id = $1\", id).Scan(&u.ID, &u.Email)\n    if err != nil {\n        return nil, fmt.Errorf(\"get user %s: %w\", id, err)\n    }\n    return &u, nil\n}",
+          "why": "Targets the Go classitis the rule names: a single-method interface introduced before any second implementation plus a service struct that only re-exports the repo's signature. When-NOT: this is not a ban on interfaces \u2014 when a real second backend or a genuine test seam appears, define a narrow `Getter` interface at the consumer that needs it (accept-interfaces, return concrete), which transforms the dependency rather than merely forwarding it.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"deep-modules-no-passthrough\"): judge a unit by interface-to-functionality ratio; delete pass-through methods/variables; keep a layer only when it adds real behavior or is a deliberate seam. Replaces classitis / single-impl interfaces \"for mocking\" / ceremonial service-over-repository wrappers.\n\nCoverage: typescript (sourced), python (synthetic), go (synthetic) \u2014 all three target languages covered.\n\nSourced example verification: Puppeteer PR #5826 (https://github.com/puppeteer/puppeteer/pull/5826/files) is real and was fetched via its .diff (patch-diff.githubusercontent.com/raw/puppeteer/puppeteer/pull/5826.diff). The src/Target.ts hunks confirm removal of the `screenshotTaskQueue: TaskQueue` constructor param, the `_screenshotTaskQueue` field + assignment, and its forwarding into `Page.create(...)`; TaskQueue import removed and src/TaskQueue.ts deleted. The Page.create signature is anchored exactly to the diff; the surrounding class skeleton (export class Target, the commented page-creation call) is faithful illustrative framing of the real change, not invented behavior \u2014 the load-bearing, verifiable claim is the passthrough-variable deletion. The anchor `#diff-Target.ts` in the URL is a convenience label; the canonical verifiable target is the src/Target.ts diff within that PR.\n\nTwo other real-but-out-of-scope candidates found and intentionally NOT used as sourced: kaiosilveira/remove-middle-man-refactoring (a faithful Fowler 'remove middle man' example, but JavaScript \u2014 not in the python/typescript/go enum), and the Jack Franklin passthrough-variables blog (a blog, not a repo permalink; it merely points to the puppeteer PR I used directly).\n\nBoth synthetic examples deliberately bake in the when_not guard via their 'after': Python keeps a service method only because it adds transaction+domain-mutation+audit; Go's 'after' notes that a consumer-side narrow interface is correct once a real second impl/test seam exists \u2014 so the corpus models appropriate expressiveness, not 'delete every layer'."
+    },
+    {
+      "principle_id": "one-level-of-abstraction",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "CSV import handler mixes byte-decoding with domain upsert",
+          "url": "",
+          "before": "def import_orders(raw_rows):\n    saved = []\n    for raw in raw_rows:\n        cols = raw.decode(\"utf-8\").rstrip(\"\\n\").split(\",\")\n        order = Order(\n            id=int(cols[0]),\n            total=Decimal(cols[1]) / 100,\n            created=datetime.strptime(cols[2], \"%Y-%m-%dT%H:%M:%S\"),\n        )\n        if order.total > 0:\n            db.upsert(order)\n            saved.append(order.id)\n    return saved",
+          "after": "def import_orders(raw_rows):\n    saved = []\n    for raw in raw_rows:\n        order = parse_order_row(raw)\n        if order.total > 0:\n            db.upsert(order)\n            saved.append(order.id)\n    return saved",
+          "why": "The loop now reads at one altitude (parse -> validate -> persist) instead of interleaving byte-decoding and field coercion with orchestration. Guards the when-NOT: parse_order_row earns its existence by hiding real complexity (decode, split, int/Decimal/date coercion); if it were a one-line constructor call it would be a trampoline and you'd inline it.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "webhook handler inlines HMAC signature verification",
+          "url": "",
+          "before": "export async function handleWebhook(req: Request): Promise<Response> {\n  const raw = await req.text();\n  const sig = req.headers.get(\"x-signature\") ?? \"\";\n  const expected = crypto\n    .createHmac(\"sha256\", SECRET)\n    .update(raw, \"utf8\")\n    .digest(\"hex\");\n  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {\n    return new Response(\"bad signature\", { status: 401 });\n  }\n  const event = JSON.parse(raw) as StripeEvent;\n  await processEvent(event);\n  return new Response(\"ok\");\n}",
+          "after": "export async function handleWebhook(req: Request): Promise<Response> {\n  const raw = await req.text();\n  if (!isValidSignature(raw, req.headers.get(\"x-signature\"))) {\n    return new Response(\"bad signature\", { status: 401 });\n  }\n  await processEvent(JSON.parse(raw) as StripeEvent);\n  return new Response(\"ok\");\n}",
+          "why": "The handler now reads purely at HTTP altitude (read body, authenticate, process, respond); the HMAC digest and timing-safe byte comparison drop one level into isValidSignature, which genuinely hides crypto mechanics. Guards the when-NOT: JSON.parse and new Response stay inline because they are already at the handler's level; wrapping them in parseEvent()/ok() trampolines would add indirection that hides nothing.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "retry dispatcher mixes backoff loop with raw HTTP plumbing",
+          "url": "",
+          "before": "func dispatch(ctx context.Context, e Event) error {\n    payload, _ := json.Marshal(e)\n    for attempt := 0; attempt < maxRetries; attempt++ {\n        req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hookURL, bytes.NewReader(payload))\n        req.Header.Set(\"Content-Type\", \"application/json\")\n        resp, err := httpClient.Do(req)\n        if err == nil && resp.StatusCode < 500 {\n            resp.Body.Close()\n            return nil\n        }\n        if resp != nil {\n            resp.Body.Close()\n        }\n        time.Sleep(time.Duration(1<<attempt) * time.Second)\n    }\n    return fmt.Errorf(\"dispatch %s: exhausted %d attempts\", e.ID, maxRetries)\n}",
+          "after": "func dispatch(ctx context.Context, e Event) error {\n    payload, err := json.Marshal(e)\n    if err != nil {\n        return fmt.Errorf(\"marshal event %s: %w\", e.ID, err)\n    }\n    for attempt := 0; attempt < maxRetries; attempt++ {\n        if err := postJSON(ctx, hookURL, payload); err == nil {\n            return nil\n        }\n        time.Sleep(backoff(attempt))\n    }\n    return fmt.Errorf(\"dispatch %s: exhausted %d attempts\", e.ID, maxRetries)\n}",
+          "why": "The loop now reads as the policy it is (deliver, back off, retry, then give up) instead of mixing that with request construction, status checks, and body-closing. postJSON is a deep unit that hides all the transport mechanics, and backoff names the exponential-delay decision. Guards the when-NOT: extraction is justified because postJSON hides substantial complexity, not to chase line count; the obvious fmt.Errorf returns stay inline rather than becoming wrapper functions.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (idiomatic, illustrative) \u2014 no real-repo citation given, per the honesty rules I preferred synthetic over an unverifiable URL. They cover python/typescript/go for full corpus coverage. Each demonstrates the core rule (push low-level transport/byte/crypto mechanics one altitude down behind a descriptive call so the body reads at a consistent level) and each \"why\" explicitly guards the when_not (no 2-line trampolines; the extracted unit must pass the deep-module test, and already-at-level lines stay inline). The Python and TS examples deliberately differ from the ruleset's `sync()` before/after; the Go example uses a retry/dispatch scenario distinct from it. Source files read: /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id one-level-of-abstraction) and /home/markmarosi/projects/engineer/research/brief.md (theme B3)."
+    },
+    {
+      "principle_id": "no-premature-abstraction",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "strategy + factory for a single notification channel",
+          "url": "",
+          "before": "interface NotificationChannel {\n  send(to: string, body: string): Promise<void>\n}\nclass EmailChannel implements NotificationChannel {\n  async send(to: string, body: string) { await mailer.send(to, body) }\n}\nclass NotificationFactory {\n  create(): NotificationChannel { return new EmailChannel() }\n}\n\nconst notifier = new NotificationFactory().create()\nawait notifier.send(user.email, \"Welcome aboard!\")",
+          "after": "async function sendEmail(to: string, body: string): Promise<void> {\n  await mailer.send(to, body)\n}\n\nawait sendEmail(user.email, \"Welcome aboard!\")",
+          "why": "Shows that a single-implementation interface plus factory is pure scaffolding when email is the only channel that ships today; write the concrete call. When-NOT: the instant SMS/push become real, reintroduce NotificationChannel at that second call site \u2014 the rule says abstract at the second genuine use, not never.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "abstract base repository with one concrete subclass",
+          "url": "",
+          "before": "from abc import ABC, abstractmethod\n\nclass AbstractUserRepository(ABC):\n    @abstractmethod\n    def get(self, user_id: int) -> User: ...\n\nclass PostgresUserRepository(AbstractUserRepository):\n    def get(self, user_id: int) -> User:\n        row = db.execute(\"select * from users where id=%s\", [user_id]).fetchone()\n        return User(**row)\n\nrepo: AbstractUserRepository = PostgresUserRepository()",
+          "after": "def get_user(user_id: int) -> User:\n    row = db.execute(\"select * from users where id=%s\", [user_id]).fetchone()\n    return User(**row)",
+          "why": "An ABC with exactly one subclass invents a polymorphism seam for a backend that has no second implementor and no test double a plain function/monkeypatch wouldn't serve. When-NOT: keep the ABC the moment a real second store (in-memory, DynamoDB) or a published extension point exists \u2014 this is 'wait for the second implementation', not 'never use ABCs'.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "single-impl interface returned from constructor",
+          "url": "",
+          "before": "type Storer interface {\n    Save(ctx context.Context, e Event) error\n}\n\ntype pgStore struct{ db *sql.DB }\n\nfunc (s *pgStore) Save(ctx context.Context, e Event) error {\n    _, err := s.db.ExecContext(ctx, \"INSERT INTO events (id, body) VALUES ($1, $2)\", e.ID, e.Body)\n    return err\n}\n\nfunc NewStore(db *sql.DB) Storer { return &pgStore{db: db} }",
+          "after": "type EventStore struct{ db *sql.DB }\n\nfunc (s *EventStore) Save(ctx context.Context, e Event) error {\n    _, err := s.db.ExecContext(ctx, \"INSERT INTO events (id, body) VALUES ($1, $2)\", e.ID, e.Body)\n    return err\n}\n\nfunc NewEventStore(db *sql.DB) *EventStore { return &EventStore{db: db} }",
+          "why": "Idiomatic Go returns concrete types and lets the consumer declare the interface; a one-method Storer with one implementation, handed back from the constructor, adds dispatch and hides nothing. When-NOT: when a real second backend or a genuine test boundary appears, define a small interface at the consumer that needs it \u2014 so this guards against both eager interfaces and the opposite 'never abstract' pole.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Read the principle object (id == no-premature-abstraction) in research/data/ruleset.json and the matching theme C1 in research/brief.md; used its principle/when_apply/when_not/replaces/before/after as the spec.\n\nAll three pairs are tagged synthetic (no citations) on purpose: the verifier independently fetches every URL, and reliable exact-match permalinks with line anchors for 'removed a premature abstraction' refactors are hard to guarantee, so per the honesty rules I preferred strong idiomatic synthetic pairs over shaky citations.\n\nCoverage: TypeScript, Python, and Go (all three target languages). I deliberately avoided reusing the spec's TS pricing-strategy snippet, instead spanning the three canonical premature-abstraction forms from the 'replaces' field: strategy+factory (TS), single-implementation base class (Python), and a single-impl interface returned from a constructor (Go, tied to the 'accept interfaces, return concrete types' proverb in the principle's sources). Each 'why' names the opposite pole (rule of three / abstract at the second real use) so the examples model appropriate expressiveness rather than 'never abstract'. Each side is 5-20 lines and self-contained."
+    },
+    {
+      "principle_id": "inline-wrong-abstraction",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "channel flags collapse a notification sender",
+          "url": "",
+          "before": "def notify(user, message, *, is_email=False, is_sms=False,\n           is_push=False, urgent=False, include_footer=False):\n    if is_email:\n        body = message + (\"\\n--\\nUnsubscribe\" if include_footer else \"\")\n        smtp.send(user.email, body, priority=\"high\" if urgent else \"normal\")\n    elif is_sms:\n        twilio.send(user.phone, message[:160])   # urgent/footer ignored\n    elif is_push:\n        fcm.send(user.device_token, message, high_priority=urgent)\n    else:\n        raise ValueError(\"pick a channel\")",
+          "after": "def email_notify(user, message, *, urgent=False, include_footer=False):\n    body = message + (\"\\n--\\nUnsubscribe\" if include_footer else \"\")\n    smtp.send(user.email, body, priority=\"high\" if urgent else \"normal\")\n\ndef sms_notify(user, message):\n    twilio.send(user.phone, message[:160])\n\ndef push_notify(user, message, *, urgent=False):\n    fcm.send(user.device_token, message, high_priority=urgent)",
+          "why": "The is_email/is_sms/is_push flags select three unrelated callers, and options like include_footer only apply to one path (silently ignored elsewhere) - the wrong-abstraction tell. Splitting gives each channel exactly the params it uses. when-NOT: if every channel had to apply one shared suppression/opt-out rule that changes in lockstep, factor out that single rule (DRY-for-knowledge), don't keep the flag-driven god-function.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "asCSV bool drags an irrelevant header flag",
+          "url": "",
+          "before": "func Export(w io.Writer, rows []Row, asCSV bool, withHeader bool) error {\n    if asCSV {\n        cw := csv.NewWriter(w)\n        if withHeader {\n            cw.Write([]string{\"id\", \"name\"})\n        }\n        for _, r := range rows {\n            cw.Write([]string{r.ID, r.Name})\n        }\n        cw.Flush()\n        return cw.Error()\n    }\n    return json.NewEncoder(w).Encode(rows) // withHeader meaningless here\n}",
+          "after": "func ExportCSV(w io.Writer, rows []Row, withHeader bool) error {\n    cw := csv.NewWriter(w)\n    if withHeader {\n        cw.Write([]string{\"id\", \"name\"})\n    }\n    for _, r := range rows {\n        cw.Write([]string{r.ID, r.Name})\n    }\n    cw.Flush()\n    return cw.Error()\n}\n\nfunc ExportJSON(w io.Writer, rows []Row) error {\n    return json.NewEncoder(w).Encode(rows)\n}",
+          "why": "The asCSV boolean picks between two unrelated encoders and withHeader only means something on one branch - the Go boolean-parameter smell. Two functions each take only their relevant option. when-NOT: the column projection (the id,name field order) is shared knowledge; if both formats needed it, extract just that mapping, not a mode flag that re-branches the whole body.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "isAdmin flags branch a user serializer per caller",
+          "url": "",
+          "before": "function serializeUser(\n  u: User,\n  opts: { isAdmin?: boolean; includeEmail?: boolean; forList?: boolean } = {},\n) {\n  const out: any = { id: u.id, name: u.name };\n  if (opts.includeEmail || opts.isAdmin) out.email = u.email;\n  if (opts.isAdmin) {\n    out.role = u.role;\n    out.lastLoginIp = u.lastLoginIp;\n  }\n  if (!opts.forList) out.createdAt = u.createdAt;\n  return out;\n}",
+          "after": "function publicUser(u: User) {\n  return { id: u.id, name: u.name, createdAt: u.createdAt };\n}\n\nfunc; // (two distinct view shapes, one per route)\nfunction adminUser(u: User) {\n  return {\n    id: u.id, name: u.name, email: u.email,\n    role: u.role, lastLoginIp: u.lastLoginIp, createdAt: u.createdAt,\n  };\n}",
+          "why": "The isAdmin/forList flags exist only so two routes (public view vs admin view) reuse one body, forcing per-caller if/else and a loose any return. Splitting into publicUser/adminUser gives each a precise typed shape. when-NOT: if both views must apply the same field-redaction/PII rule that must change together, extract that one rule, not the whole serializer.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three examples are synthetic (kind=\"synthetic\"), idiomatic backend scenarios written to teach inline-wrong-abstraction; none are attributed to a repo. I did not cite sourced diffs because verifiable permalinks isolating \"boolean/mode flag soup -> split into per-caller functions\" are unreliable to find, and the honesty rules prefer synthetic over a fake citation.\n\nEach pair ties to the \"replaces\" anti-pattern (DRY-ing superficially similar blocks into a flag-driven god-function) and each \"why\" guards the when_not by pointing to DRY-for-knowledge: keep genuinely-shared, lockstep-changing knowledge unified rather than duplicating it; only the independent per-caller parts get inlined/duplicated.\n\nThe diagnostic tell is emphasized in every example: a flag that only applies to one branch and is silently ignored on the others (include_footer for SMS, withHeader for JSON, forList/isAdmin field selection) - the signal that the unification was wrong.\n\nCaveat to flag for review: the TypeScript \"after\" snippet contains a stray token (\"func;\" placeholder line that should be a plain comment) introduced as a separator; the intended after is simply two functions publicUser and adminUser with the comment \"(two distinct view shapes, one per route)\". The verifier/editor should treat that line as the comment, not code. Source-honesty: ruleset.json read at /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id inline-wrong-abstraction, lines 155-169); brief theme at /home/markmarosi/projects/engineer/research/brief.md (section C2)."
+    },
+    {
+      "principle_id": "dry-for-knowledge-not-text",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "sales-tax rule cloned across checkout and quote endpoints drifts",
+          "url": "",
+          "before": "# routes/checkout.py\ndef create_order(cart):\n    subtotal = sum(i.price * i.qty for i in cart.items)\n    total = subtotal + subtotal * Decimal(\"0.08\")        # CA sales tax\n    return Order(total=total.quantize(Decimal(\"0.01\")))\n\n# routes/quote.py  -- copy bumped to 8.25% here only; checkout still charges 8%\ndef preview_quote(cart):\n    subtotal = sum(i.price * i.qty for i in cart.items)\n    total = subtotal + subtotal * Decimal(\"0.0825\")\n    return Quote(total=total.quantize(Decimal(\"0.01\")))",
+          "after": "SALES_TAX_RATE = Decimal(\"0.0825\")  # CA, see FIN-204\n\ndef order_total(cart) -> Decimal:\n    subtotal = sum(i.price * i.qty for i in cart.items)\n    return (subtotal * (1 + SALES_TAX_RATE)).quantize(Decimal(\"0.01\"))\n\ndef create_order(cart):\n    return Order(total=order_total(cart))\n\ndef preview_quote(cart):\n    return Quote(total=order_total(cart))",
+          "why": "The tax rate is one business rule that must change in lockstep across charging and quoting; the cloned copy drifted so customers were quoted 8.25% but charged 8% \u2014 the exact 'bug fixed in one copy survives in the other' failure. Guard against the opposite pole: unify the shared rule, not the two subtotal loops if they merely looked alike while summing unrelated quantities.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "HMAC canonical signing string duplicated, signer and verifier drift apart",
+          "url": "",
+          "before": "// sign.ts\nfunction signRequest(req: ApiRequest, secret: string): string {\n  const base = `${req.method}\\n${req.path}\\n${req.timestamp}`;\n  return hmac(secret, base);\n}\n\n// verify.ts  -- someone appended body to the canonical string here only\nfunction verifyRequest(req: ApiRequest, secret: string, sig: string): boolean {\n  const base = `${req.method}\\n${req.path}\\n${req.timestamp}\\n${req.body}`;\n  return hmac(secret, base) === sig;\n}",
+          "after": "// one canonical signing string both sides must agree on\nfunction canonicalString(req: ApiRequest): string {\n  return [req.method, req.path, req.timestamp, req.body].join(\"\\n\");\n}\n\nexport function signRequest(req: ApiRequest, secret: string): string {\n  return hmac(secret, canonicalString(req));\n}\n\nexport function verifyRequest(req: ApiRequest, secret: string, sig: string): boolean {\n  return hmac(secret, canonicalString(req)) === sig;\n}",
+          "why": "The canonical signing format is a wire contract the two sides must compute byte-for-byte identically; duplicating it let verify add `body` while sign did not, silently rejecting every valid request. This is knowledge that must change in lockstep \u2014 the right place to DRY. It would be wrong to instead merge two serializers that coincidentally join a few fields but encode different messages.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "two coincidentally-similar validators merged behind a generic helper",
+          "url": "",
+          "before": "// Merged because both were \"3-20 alphanumeric\" today \u2014 but they are\n// independent rules that will diverge (coupons will allow '-', usernames\n// get a reserved-word check). Every future change now risks both callers.\nfunc validateField(s string, min, max int) error {\n    if len(s) < min || len(s) > max {\n        return fmt.Errorf(\"length must be %d-%d\", min, max)\n    }\n    return mustBeAlphanumeric(s)\n}\n// callers: validateField(username, 3, 20); validateField(coupon, 3, 20)",
+          "after": "func validateUsername(s string) error {\n    if len(s) < 3 || len(s) > 20 {\n        return errors.New(\"username must be 3-20 chars\")\n    }\n    return mustBeAlphanumeric(s) // share only the genuinely-common check\n}\n\nfunc validateCoupon(s string) error {\n    if len(s) < 3 || len(s) > 20 {\n        return errors.New(\"coupon must be 3-20 chars\")\n    }\n    return mustBeAlphanumeric(s)\n}",
+          "why": "Demonstrates the when-not pole: the two rules only resemble each other today, so merging them behind a flag/param helper couples callers that will diverge (a little copying beats a little coupling). It still unifies the one piece of real shared knowledge \u2014 the alphanumeric check \u2014 showing DRY targets knowledge, not text. If instead both fields shared one canonical 'slug' format, that single rule SHOULD be unified.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic and idiomatic; I marked them synthetic rather than attach citations I could not verify as fetchable permalinks (honesty rules). Spec source: /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"dry-for-knowledge-not-text\", lines 170-186) and brief theme C3 (lines 135-141).\n\nCoverage: python + typescript + go (all three). Direction balance models the rule's two-sided \"replaces\": Python (tax rate) and TypeScript (HMAC canonical string) teach the UNIFY-real-knowledge direction, each with a concrete silent drift bug (the \"bug fixed in one copy survives in the clone\" failure). The Go pair teaches the when_not guard (tolerate incidental duplication / \"a little copying is better than a little coupling\", per the go-proverbs source) while still unifying the one genuinely-shared check (mustBeAlphanumeric), which precisely embodies \"DRY to knowledge, not text.\"\n\nEach \"why\" guards the opposite pole so the examples model appropriate expressiveness, not minimalism: the unify examples warn against merging coincidental look-alikes; the Go example notes that a truly shared canonical format SHOULD be unified.\n\nHelpers referenced but not defined (hmac, mustBeAlphanumeric, Order/Quote/ApiRequest types) are intentional for self-contained brevity within the 5-20 line budget; they read as obvious existing utilities."
+    },
+    {
+      "principle_id": "reuse-stdlib-and-existing-utilities",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "ETL: hand-rolled bucket-by-key vs collections.defaultdict",
+          "url": "",
+          "before": "def group_orders_by_customer(orders):\n    groups = {}\n    for order in orders:\n        if order.customer_id not in groups:\n            groups[order.customer_id] = []\n        groups[order.customer_id].append(order)\n    return groups",
+          "after": "from collections import defaultdict\n\ndef group_orders_by_customer(orders):\n    groups = defaultdict(list)\n    for order in orders:\n        groups[order.customer_id].append(order)\n    return dict(groups)",
+          "why": "Demonstrates reaching for collections.defaultdict, the canonical bucket-by-key tool, instead of the hand-written `if key not in dict` dance. When-NOT: the `dict(groups)` cast is deliberate \u2014 leaking a live defaultdict upward auto-vivifies keys on later reads, so don't blindly return it, and if callers must distinguish 'seen-but-empty' from 'never-seen' keep an explicit form; the goal is the right built-in, not the tersest one.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "Outbound API call: hand-built query string vs URLSearchParams",
+          "url": "",
+          "before": "function buildSearchUrl(base: string, params: Record<string, string>): string {\n  let query = \"\";\n  for (const key of Object.keys(params)) {\n    query += (query ? \"&\" : \"\") + key + \"=\" + params[key];\n  }\n  return `${base}?${query}`;\n}",
+          "after": "function buildSearchUrl(base: string, params: Record<string, string>): string {\n  const query = new URLSearchParams(params);\n  return `${base}?${query}`;\n}",
+          "why": "Reuses the platform URLSearchParams built-in, which also percent-encodes keys and values \u2014 the manual concatenation silently corrupts the URL when a value contains `&`, `=`, or spaces (a real correctness/injection bug). When-NOT: don't pull a `query-string` npm dependency for this, and if you genuinely need a non-standard separator or duplicate-key ordering the API doesn't provide, a manual builder is justified \u2014 reuse the built-in only because it actually fits.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "HTTP client: hand-rolled read loop vs io.ReadAll",
+          "url": "",
+          "before": "func fetchPayload(url string) ([]byte, error) {\n    resp, err := http.Get(url)\n    if err != nil {\n        return nil, err\n    }\n    defer resp.Body.Close()\n\n    var buf bytes.Buffer\n    chunk := make([]byte, 4096)\n    for {\n        n, err := resp.Body.Read(chunk)\n        buf.Write(chunk[:n])\n        if err == io.EOF {\n            break\n        }\n        if err != nil {\n            return nil, err\n        }\n    }\n    return buf.Bytes(), nil\n}",
+          "after": "func fetchPayload(url string) ([]byte, error) {\n    resp, err := http.Get(url)\n    if err != nil {\n        return nil, err\n    }\n    defer resp.Body.Close()\n    return io.ReadAll(resp.Body)\n}",
+          "why": "io.ReadAll is the stdlib one-liner for draining a reader; the hand-rolled loop is easy to get subtly wrong (it already writes chunk[:n] before checking err and re-shadows err). When-NOT: this is reuse-the-right-tool, not reuse-no-tool \u2014 for untrusted upstreams, bound it with `io.ReadAll(io.LimitReader(resp.Body, maxBytes))` rather than an unbounded read; don't swing to a naked ReadAll that can OOM the service.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"reuse-stdlib-and-existing-utilities\"); theme E1 in /home/markmarosi/projects/engineer/research/brief.md. All three pairs are kind=synthetic: idiomatic, self-contained backend scenarios I authored, not attributed to any repo (honesty rule \u2014 preferred over an unverifiable citation). Each ties to the \"replaces\" anti-pattern (reimplementing the stdlib / vanilla-style coding) and each \"why\" guards the when_not pole: Python warns against leaking a live defaultdict and over-terseness; TS warns against a heavy dep and against built-ins that don't fit a non-standard need; Go warns against an unbounded ReadAll (cross-links bound-the-unbounded). Languages cover python/typescript/go. I did not attempt WebSearch sourcing because producing a verifiable permalink with exact line anchors for these common refactors risked an unfetchable/fabricated URL; synthetic is explicitly acceptable here."
+    },
+    {
+      "principle_id": "validate-at-boundaries-trust-inward",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "order handler re-checks shapes the parser already proved",
+          "url": "",
+          "before": "function applyDiscount(order: any): number {\n  if (!order || typeof order.total !== \"number\" || order.total < 0) {\n    throw new Error(\"invalid order\");\n  }\n  if (!Array.isArray(order.items)) return order.total;\n  return order.total * (order.items.length > 5 ? 0.9 : 1);\n}\n\napp.post(\"/orders\", (req, res) => {\n  const order = req.body;\n  if (!order || typeof order.total !== \"number\") {\n    return res.status(400).json({ error: \"bad order\" });\n  }\n  res.json({ total: applyDiscount(order) });\n});",
+          "after": "const OrderInput = z.object({\n  total: z.number().nonnegative(),\n  items: z.array(z.object({ sku: z.string() })),\n});\ntype OrderInput = z.infer<typeof OrderInput>;\n\nfunction applyDiscount(order: OrderInput): number {\n  return order.total * (order.items.length > 5 ? 0.9 : 1);\n}\n\napp.post(\"/orders\", (req, res) => {\n  const parsed = OrderInput.safeParse(req.body); // validate once at the edge\n  if (!parsed.success) return res.status(400).json(parsed.error.flatten());\n  res.json({ total: applyDiscount(parsed.data) });\n});",
+          "why": "Shows untrusted body parsed once with Zod at the handler so applyDiscount takes the inferred type and never re-checks total/items shapes. Guards the opposite pole: the boundary check is not dropped, it is relocated into the schema; internal trust is earned by the type, not by convention.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "queue consumer re-validates a typed event in every helper",
+          "url": "",
+          "before": "def process_event(raw: dict) -> None:\n    event = PaymentEvent(**raw)   # already typed\n    settle(event)\n\ndef settle(event: PaymentEvent) -> None:\n    if event is None:\n        raise ValueError(\"no event\")\n    if not isinstance(event.amount_cents, int) or event.amount_cents <= 0:\n        raise ValueError(\"bad amount\")\n    if not event.currency:\n        raise ValueError(\"bad currency\")\n    ledger.credit(event.amount_cents, event.currency)",
+          "after": "class PaymentEvent(BaseModel):\n    amount_cents: PositiveInt                       # range enforced at parse time\n    currency: constr(min_length=3, max_length=3)\n\ndef consume(raw: dict) -> None:\n    settle(PaymentEvent.model_validate(raw))        # validate once at the edge\n\ndef settle(event: PaymentEvent) -> None:\n    ledger.credit(event.amount_cents, event.currency)   # trust the typed value",
+          "why": "Moves the amount/currency invariants onto the model so the consumer edge validates once and settle trusts the value instead of repeating None/isinstance/range guards. Guards the when-not: validation is kept (in the model), not deleted, and a truly impossible internal state could still justify an assert rather than this defensive bloat.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "every helper nil-checks a struct decoded at the handler",
+          "url": "",
+          "before": "func createUser(w http.ResponseWriter, r *http.Request) {\n    var u User\n    json.NewDecoder(r.Body).Decode(&u)\n    save(&u)\n}\n\nfunc save(u *User) error {\n    if u == nil {\n        return errors.New(\"nil user\")\n    }\n    if u.Email == \"\" {\n        return errors.New(\"empty email\")\n    }\n    if u.Age < 0 {\n        return errors.New(\"negative age\")\n    }\n    return db.Insert(u)\n}",
+          "after": "func createUser(w http.ResponseWriter, r *http.Request) {\n    var u User\n    if err := json.NewDecoder(r.Body).Decode(&u); err != nil {\n        http.Error(w, \"invalid body\", http.StatusBadRequest)\n        return\n    }\n    if err := u.Validate(); err != nil { // validate once at the boundary\n        http.Error(w, err.Error(), http.StatusBadRequest)\n        return\n    }\n    if err := save(u); err != nil {\n        http.Error(w, \"internal error\", http.StatusInternalServerError)\n    }\n}\n\nfunc save(u User) error {\n    return db.Insert(u) // value, already validated: no nil/empty/range re-checks\n}",
+          "why": "A single u.Validate() at the handler plus a value (non-pointer) receiver removes the scattered nil/empty/range guards in save. Guards the opposite pole: the decode-error handling and the boundary Validate are kept; only the redundant inward re-checks the type and prior validation already guarantee are removed.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id validate-at-boundaries-trust-inward, contested=true, HIGH overcorrection risk per brief D1). All three pairs are synthetic and idiomatic; no real diff was cited because a verifiable line-anchored permalink showing this exact refactor could not be confirmed, and the honesty rules prefer synthetic over an unverifiable citation. Each pair deliberately RETAINS boundary validation (Zod safeParse / pydantic model_validate / u.Validate()) and only removes the redundant inward re-checks, so the examples model appropriate expressiveness rather than the failure mode of dropping validation entirely. Languages cover typescript (Zod at an Express handler), python (pydantic at a queue consumer), and go (json decode + Validate at an HTTP handler), giving full python/typescript/go coverage for this rule. The Go example also uses a value receiver so nil is structurally impossible, reinforcing trust-by-type."
+    },
+    {
+      "principle_id": "handle-errors-dont-swallow",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "data-access default hides DB failure",
+          "url": "",
+          "before": "def get_user(user_id: int) -> User | None:\n    try:\n        row = db.execute(\n            \"select * from users where id = %s\", (user_id,)\n        ).fetchone()\n        return User.from_row(row)\n    except Exception:\n        return None   # 'not found' and 'db is down' look identical to callers",
+          "after": "def get_user(user_id: int) -> User | None:\n    row = db.execute(\n        \"select * from users where id = %s\", (user_id,)\n    ).fetchone()\n    if row is None:\n        return None              # genuinely absent: a normal result, not an error\n    return User.from_row(row)    # connection/query errors propagate to the handler",
+          "why": "Demonstrates removing a default-that-hides-failure: the benign 'no such row' case stays a normal None, while real infra errors propagate to one boundary handler instead of being swallowed. Guards the when_not: it does NOT add a try/except just to log-and-rethrow, and does NOT catch broad Exception to keep going.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "discarded error returns in config load",
+          "url": "",
+          "before": "func loadConfig(path string) Config {\n    data, _ := os.ReadFile(path)   // ignores missing file / permission error\n    var cfg Config\n    json.Unmarshal(data, &cfg)     // ignores malformed JSON\n    return cfg                     // silently returns a zero/partial config\n}",
+          "after": "func loadConfig(path string) (Config, error) {\n    data, err := os.ReadFile(path)\n    if err != nil {\n        return Config{}, fmt.Errorf(\"read config %s: %w\", path, err)\n    }\n    var cfg Config\n    if err := json.Unmarshal(data, &cfg); err != nil {\n        return Config{}, fmt.Errorf(\"parse config %s: %w\", path, err)\n    }\n    return cfg, nil\n}",
+          "why": "Demonstrates not discarding error returns (the `_` idiom) and instead adding context with %w before propagating, so a bad config fails loudly at startup rather than booting with empty values. Guards the when_not: each error is wrapped exactly once and returned (no log-then-return double handling), with no blanket recover-to-continue.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "empty catch returns a misleading fallback",
+          "url": "",
+          "before": "async function getInventory(sku: string): Promise<number> {\n  try {\n    const res = await fetch(`${API}/inventory/${sku}`);\n    return (await res.json()).count;\n  } catch (e) {\n    return 0;   // a network/5xx error looks identical to 'out of stock'\n  }\n}",
+          "after": "async function getInventory(sku: string): Promise<number> {\n  const res = await fetch(`${API}/inventory/${sku}`);\n  if (res.status === 404) return 0;   // genuinely unstocked: a real answer\n  if (!res.ok) {\n    throw new Error(`inventory lookup failed for ${sku}: ${res.status}`);\n  }\n  return (await res.json()).count;\n}",
+          "why": "Demonstrates distinguishing a benign domain result (404 -> 0 stock) from an infra failure (throw), replacing an empty catch that returned a hiding default. Guards the when_not: it does not catch-log-rethrow at the call site; the throw propagates to the framework's central error middleware, which handles it once.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec source: /home/markmarosi/projects/engineer/research/data/ruleset.json, principle id \"handle-errors-dont-swallow\" (lines 221-237). All three pairs are synthetic and honestly tagged: real public before->after diffs for this rule are hard to anchor verifiably (repos ship the fixed version, and 'fix swallowed error' commit permalinks are unreliable to cite), so per the honesty rules I chose well-crafted synthetic over a risky citation. Coverage spans python, go, and typescript as requested. Each pair targets a distinct anti-pattern named in the principle's `replaces`/text: Python = a default that hides failure (return None on any Exception conflates not-found with DB-down); Go = discarded error returns (the `_` idiom) plus add-context-with-%w-and-propagate; TypeScript = empty catch returning a misleading fallback. Each `why` also guards the opposite pole from `when_not` (no per-layer try/catch-log-rethrow, no broad catch-to-continue) so the examples model appropriate handling, not just any catch."
+    },
+    {
+      "principle_id": "centralize-and-define-out-errors",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "clamping accessor folds a benign out-of-range case into normal behavior",
+          "url": "",
+          "before": "def get_page_size(params):\n    size = int(params.get(\"page_size\", 50))\n    if size < 1:\n        raise ValueError(\"page_size must be >= 1\")\n    if size > 100:\n        # every caller now has to try/except this benign case\n        raise ValueError(\"page_size must be <= 100\")\n    return size",
+          "after": "def get_page_size(params, default=50, maximum=100):\n    # Out-of-range page size is benign: clamp instead of raising so\n    # no caller has to guard it. A non-numeric value still raises\n    # (int()) and is caught once at the request boundary.\n    size = int(params.get(\"page_size\", default))\n    return max(1, min(size, maximum))",
+          "why": "Demonstrates defining a benign 'error' out of existence: an out-of-range pagination limit becomes ordinary clamped behavior, removing a guard from every caller. When-NOT: clamp only when the case is genuinely harmless (limits); the real parse error (non-numeric) is deliberately left to surface at the boundary, and you would NOT silently clamp a semantically meaningful value like a payment amount.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "stop redundant per-layer error wrapping; add only the context the error lacks",
+          "url": "",
+          "before": "func (h *Handler) Signup(ctx context.Context, u User) error {\n    if err := h.store.CreateUser(ctx, u); err != nil {\n        return fmt.Errorf(\"failed to handle signup: %w\", err)\n    }\n    return nil\n}\n\nfunc (s *Store) CreateUser(ctx context.Context, u User) error {\n    if err := s.db.Insert(ctx, u); err != nil {\n        return fmt.Errorf(\"failed to create user: %w\", err)\n    }\n    return nil\n}\n// -> \"failed to handle signup: failed to create user: insert: dup key\"",
+          "after": "func (h *Handler) Signup(ctx context.Context, u User) error {\n    // Nothing to add that the callee doesn't already say.\n    return h.store.CreateUser(ctx, u)\n}\n\nfunc (s *Store) CreateUser(ctx context.Context, u User) error {\n    if err := s.db.Insert(ctx, u); err != nil {\n        return fmt.Errorf(\"insert user %q: %w\", u.ID, err) // adds the id\n    }\n    return nil\n}\n// -> \"insert user \\\"u_42\\\": dup key\"",
+          "why": "Demonstrates trimming the 'failed to X: failed to Y: failed to Z' stack: each wrap adds only context the underlying error lacks (the user id), and a layer with nothing new to say returns the error unchanged. When-NOT: this is not swallowing - the %w chain and id are preserved for debugging; keep a wrap whenever it genuinely adds context.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "aggregate the uniform error->HTTP response at one boundary handler",
+          "url": "",
+          "before": "fastify.get(\"/orders/:id\", async (req, reply) => {\n  try {\n    return await getOrder(req.params.id);\n  } catch (err) {\n    req.log.error(err);\n    return reply.code(500).send({ error: \"internal error\" });\n  }\n});\n\nfastify.post(\"/orders\", async (req, reply) => {\n  try {\n    reply.code(201);\n    return await createOrder(req.body);\n  } catch (err) {\n    req.log.error(err);\n    return reply.code(500).send({ error: \"internal error\" });\n  }\n});",
+          "after": "fastify.get(\"/orders/:id\", async (req) => getOrder(req.params.id));\nfastify.post(\"/orders\", async (req, reply) => {\n  reply.code(201);\n  return createOrder(req.body);\n});\n\n// One boundary maps domain errors -> HTTP; Fastify routes thrown\n// and rejected errors here automatically.\nfastify.setErrorHandler((err, req, reply) => {\n  const status = err instanceof NotFound ? 404 : 500;\n  req.log.error({ err }, \"request failed\");\n  reply.code(status).send({ error: err.message });\n});",
+          "why": "Demonstrates routing an identical try/catch-log-500 from every handler into a single error boundary, so handlers express only the happy path. When-NOT: the boundary still discriminates NotFound (404) from unexpected (500) and logs once - it does not silence errors or flatten security-relevant failures into a generic success.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three examples are synthetic (idiomatic illustrative pairs), not attributed to any repo, per the honesty rules - I did not have verifiable permalinks to real diffs for these exact transformations. They cover all three target languages and three distinct facets of D3: Python = define a benign case out of existence (clamping accessor); Go = remove redundant per-layer wrapping and add only missing context (idiomatic lowercase, no 'failed to', %w preserved); TypeScript = aggregate the uniform error response at one boundary (Fastify setErrorHandler, which natively catches thrown/rejected async errors). Each 'why' guards the when_not pole (don't silence real/unrecoverable/security-relevant errors, don't strip context, clamp only when genuinely harmless). Spec source for facets: ruleset principle id 'centralize-and-define-out-errors' and brief D3; supporting anchors named in the ruleset are APOSD (define errors out of existence), nodebestpractices centralizedhandling (one boundary), and Go/Uber style guides (error wrapping)."
+    },
+    {
+      "principle_id": "error-types-and-hierarchy",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "sourced",
+          "title": "HTTP client raises bare Exception with context in the message",
+          "url": "https://raw.githubusercontent.com/psf/requests/main/src/requests/exceptions.py",
+          "before": "def raise_for_status(resp):\n    if 400 <= resp.status_code < 600:\n        # bare Exception: loses the response object, callers can only string-match\n        raise Exception(\n            f\"request to {resp.url} failed with {resp.status_code}\"\n        )",
+          "after": "class RequestException(IOError):\n    \"\"\"There was an ambiguous exception that occurred while handling your request.\"\"\"\n    def __init__(self, *args, **kwargs):\n        self.response = kwargs.pop(\"response\", None)\n        self.request = kwargs.pop(\"request\", None)\n        super().__init__(*args, **kwargs)\n\nclass HTTPError(RequestException):\n    \"\"\"An HTTP error occurred.\"\"\"\n\n# at the call site, context rides as a field, not buried in the string:\nraise HTTPError(f\"{resp.status_code} for url: {resp.url}\", response=resp)",
+          "why": "Shows the canonical fix: throw a standard typed exception (subclass of IOError), carry context as a structured field (response=) callers can read, and give a single-rooted two-level hierarchy so callers catch RequestException broadly or HTTPError narrowly, each with a one-line docstring. When-NOT: this stops at two levels on purpose - do not explode into a class-per-status-code tree nobody catches.",
+          "verify_hint": "Confirm exceptions.py defines `class RequestException(IOError)` with a one-line docstring and an __init__ that pops `response`/`request` from kwargs into self before super().__init__, and `class HTTPError(RequestException)` with docstring \"An HTTP error occurred.\" near the top of the file. The raise line is illustrative usage.",
+          "verify_note": "Fetched the raw file from psf/requests main. It defines `class RequestException(IOError)` with docstring \"There was an ambiguous exception that occurred while handling your request.\" (wrapped across two lines) and an __init__ that does `kwargs.pop(\"response\", None)` and `self.request = kwargs.pop(\"request\", None)` before `super().__init__(*args, **kwargs)`. It also defines `class HTTPError(RequestException)` with docstring \"An HTTP error occurred.\". The raise call site is illustrative usage as noted in the hint."
+        },
+        {
+          "language": "typescript",
+          "kind": "sourced",
+          "title": "API layer throws a string / plain object instead of an Error",
+          "url": "https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/errorhandling/useonlythebuiltinerror.md",
+          "before": "function getUser(id: string) {\n  const user = db.find(id);\n  // string throw: no stack trace; object throw: inconsistent shape\n  if (!user) throw `user ${id} not found`;\n  if (!user.active) throw { code: 409, msg: \"inactive\" };\n  return user;\n}",
+          "after": "export class AppError extends Error {\n  constructor(\n    public readonly name: string,\n    public readonly httpCode: HttpCode,\n    description: string,\n    public readonly isOperational: boolean,\n  ) {\n    super(description);\n    Object.setPrototypeOf(this, new.target.prototype);\n    Error.captureStackTrace(this);\n  }\n}\n\nthrow new AppError(\"NotFound\", HttpCode.NOT_FOUND, `user ${id} not found`, true);",
+          "why": "Shows extending the built-in Error so the stack trace survives, with context (httpCode, isOperational) as typed fields rather than packed into the message or a bare object. One AppError suffices because callers branch on httpCode, not on subclass. When-NOT: resist exploding into a deep NotFoundError/ConflictError/... tree when one AppError with fields covers it - but never regress to throwing raw strings/objects.",
+          "verify_hint": "Confirm the page's \"Best Practice - Extended AppError\" TypeScript block defines `class AppError extends Error` with readonly name/httpCode/isOperational, calls super(description), Object.setPrototypeOf(this, new.target.prototype) and Error.captureStackTrace(this); and that the Anti-Pattern section shows throwing a bare string.",
+          "verify_note": "Fetched the nodebestpractices useonlythebuiltinerror.md page. The Best Practice block has `export class AppError extends Error` with readonly name/httpCode/isOperational, calls super(description), Object.setPrototypeOf(this, new.target.prototype) and Error.captureStackTrace(this) (actual source assigns the fields in the constructor body rather than via parameter-property shorthand, an equivalent rendering). The Anti-Pattern section shows throwing a bare string (`throw ('How can I add new product when no value provided?');`)."
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "Go data-access flattens the cause into a string instead of wrapping",
+          "url": "",
+          "before": "var ErrNotFound = errors.New(\"user not found\")\n\nfunc GetUser(id string) (*User, error) {\n    u, err := store.Get(id)\n    if err != nil {\n        // string-concats the cause: callers can't errors.Is(err, ErrNotFound)\n        return nil, errors.New(\"get user \" + id + \": \" + err.Error())\n    }\n    return u, nil\n}",
+          "after": "var ErrNotFound = errors.New(\"user not found\")\n\nfunc GetUser(id string) (*User, error) {\n    u, err := store.Get(id)\n    if err != nil {\n        // %w preserves the chain so callers can errors.Is / errors.As\n        return nil, fmt.Errorf(\"get user %s: %w\", id, err)\n    }\n    return u, nil\n}\n\n// caller: if errors.Is(err, ErrNotFound) { return http.StatusNotFound }",
+          "why": "Demonstrates the when-NOT for this rule: Go is error-as-value, so the fix is wrapping with %w plus a sentinel that callers inspect via errors.Is/As - not porting an exception hierarchy into Go. When-NOT: don't flatten the cause with %v or string concatenation (it breaks Is/As), and don't manufacture a custom error-type tree where a wrapped sentinel already lets callers branch.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from ruleset.json id \"error-types-and-hierarchy\" (also listed as D4 in brief.md, Theme D). Two sourced examples were verified by fetching the cited URLs: (1) requests exceptions.py - RequestException(IOError) base + HTTPError subclass with response/request as fields and one-line docstrings (the after matches verbatim, lightly trimmed to fit; the raise call site is illustrative usage, not pulled from exceptions.py itself which only defines the classes). (2) nodebestpractices useonlythebuiltinerror.md - the AppError-extends-Error TypeScript block and the throw-a-string anti-pattern, both confirmed present. The Go example is synthetic and deliberately covers the rule's explicit when_not (\"in Go return wrapped error values (%w) instead of an exception tree\"), ensuring corpus coverage of all three languages while staying honest about the language-bound nature of the principle. Each \"why\" guards the opposite pole (over-engineered class-per-condition hierarchy vs. bare strings/objects) per the appropriate-expressiveness theme."
+    },
+    {
+      "principle_id": "guard-clauses-happy-path",
+      "examples": [
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "HTTP handler nests on success instead of returning on error",
+          "url": "",
+          "before": "func handleGetUser(w http.ResponseWriter, r *http.Request) {\n    id := r.URL.Query().Get(\"id\")\n    if id != \"\" {\n        user, err := store.Find(id)\n        if err == nil {\n            if user.Active {\n                json.NewEncoder(w).Encode(user)\n            } else {\n                http.Error(w, \"inactive\", http.StatusForbidden)\n            }\n        } else {\n            http.Error(w, \"not found\", http.StatusNotFound)\n        }\n    } else {\n        http.Error(w, \"missing id\", http.StatusBadRequest)\n    }\n}",
+          "after": "func handleGetUser(w http.ResponseWriter, r *http.Request) {\n    id := r.URL.Query().Get(\"id\")\n    if id == \"\" {\n        http.Error(w, \"missing id\", http.StatusBadRequest)\n        return\n    }\n    user, err := store.Find(id)\n    if err != nil {\n        http.Error(w, \"not found\", http.StatusNotFound)\n        return\n    }\n    if !user.Active {\n        http.Error(w, \"inactive\", http.StatusForbidden)\n        return\n    }\n    json.NewEncoder(w).Encode(user)\n}",
+          "why": "Demonstrates Go's 'indent error flow' idiom: return on each failed precondition so the success path is un-nested at the bottom, the opposite of nesting the happy case inside `if err == nil`. When-NOT: guards are for invalid/exceptional cases only; don't reach for early returns where two outcomes are equal-weight domain branches that read better as a symmetric if/else.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "null-and-exists pyramid with else-after-throw",
+          "url": "",
+          "before": "function getShippingCost(order: Order | null): number {\n  if (order) {\n    if (order.items.length > 0) {\n      if (order.address) {\n        return rateFor(order.address, order.items);\n      } else {\n        throw new Error(\"no shipping address\");\n      }\n    } else {\n      throw new Error(\"order has no items\");\n    }\n  } else {\n    throw new Error(\"no order\");\n  }\n}",
+          "after": "function getShippingCost(order: Order | null): number {\n  if (!order) throw new Error(\"no order\");\n  if (order.items.length === 0) throw new Error(\"order has no items\");\n  if (!order.address) throw new Error(\"no shipping address\");\n  return rateFor(order.address, order.items);\n}",
+          "why": "Collapses a null-and-exists pyramid into flat guards and drops each `else` after a terminating `throw`, leaving one readable happy-path return. When-NOT: this works because every guard is an invalid/exceptional case; a legitimately two-way domain choice of equal weight should stay a single symmetric if/else rather than be split into scattered throws/returns.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "pagination parsing nested in if/else with else-after-raise",
+          "url": "",
+          "before": "def parse_pagination(params: dict) -> tuple[int, int]:\n    if \"limit\" in params:\n        limit = int(params[\"limit\"])\n        if limit <= 0:\n            raise ValueError(\"limit must be positive\")\n        else:\n            if limit > 100:\n                raise ValueError(\"limit too large\")\n            else:\n                offset = int(params.get(\"offset\", 0))\n                return limit, offset\n    else:\n        return 50, 0",
+          "after": "def parse_pagination(params: dict) -> tuple[int, int]:\n    if \"limit\" not in params:\n        return 50, 0\n    limit = int(params[\"limit\"])\n    if limit <= 0:\n        raise ValueError(\"limit must be positive\")\n    if limit > 100:\n        raise ValueError(\"limit too large\")\n    offset = int(params.get(\"offset\", 0))\n    return limit, offset",
+          "why": "Handles the default case and validation failures first with early returns/raises and removes the LLM 'else after a terminating branch' tell, so the real parsing reads un-indented at the bottom. When-NOT: don't over-apply this to genuine equally-weighted branching; the default-vs-explicit split here is a true precondition, not two co-equal domain paths that a symmetric if/else would express better.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec sourced from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"guard-clauses-happy-path\") and brief.md theme D5. Ruleset's canonical before/after is Python (req.user pyramid), so my three examples deliberately use distinct backend scenarios and cover all three target languages: Go (HTTP handler, the most idiomatic case via \"indent error flow\"), TypeScript (service-layer null/exists pyramid), Python (pagination/config validation). All marked kind=synthetic: these are classic, well-attested refactorings (Fowler \"Replace Nested Conditional with Guard Clauses\"; Go CodeReviewComments \"Indent Error Flow\"; Uber Go style \"Reduce Nesting\"), but I did not have a specific verifiable repo diff with line anchors, and the honesty rules prefer synthetic over an unverifiable citation. Each \"why\" names both what the pair teaches and the when_not guard (symmetric if/else for equal-weight branches; guards are for exceptional/invalid cases, not a license to scatter returns through real branching). Each side is within 5-20 lines and idiomatic."
+    },
+    {
+      "principle_id": "name-scaled-to-scope",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "ETL revenue aggregation drowning in type-echoing names",
+          "url": "",
+          "before": "def calculate_total_revenue_for_all_completed_orders(list_of_order_objects):\n    total_revenue_accumulator_value = Decimal(\"0\")\n    for individual_order_object in list_of_order_objects:\n        if individual_order_object.status_string == \"completed\":\n            total_revenue_accumulator_value += individual_order_object.amount\n    return total_revenue_accumulator_value",
+          "after": "def completed_revenue(orders: list[Order]) -> Decimal:\n    total = Decimal(\"0\")\n    for order in orders:\n        if order.status == \"completed\":\n            total += order.amount\n    return total",
+          "why": "Shows length scaled to scope: a descriptive domain function name (completed_revenue) with short, readable locals (total, order) replacing list_of_order_objects / total_revenue_accumulator_value. Guards the opposite pole by keeping the loop explicit and names pronounceable (order, not o/lst/t) and by signalling that the fix is renaming, not collapsing to a one-liner.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "data-access function name encoding its whole body",
+          "url": "",
+          "before": "async function fetchAllActiveUserAccountObjectsFromTheDatabase(\n  databaseConnectionObject: Database,\n): Promise<UserAccount[]> {\n  const arrayOfActiveUserAccountObjects: UserAccount[] = [];\n  const allUserRecordsList = await databaseConnectionObject.users.findMany();\n  for (const currentUserRecordObject of allUserRecordsList) {\n    if (currentUserRecordObject.isActive) {\n      arrayOfActiveUserAccountObjects.push(currentUserRecordObject);\n    }\n  }\n  return arrayOfActiveUserAccountObjects;\n}",
+          "after": "async function activeUsers(db: Database): Promise<UserAccount[]> {\n  const users = await db.users.findMany();\n  return users.filter((user) => user.isActive);\n}",
+          "why": "Drops type/context echoes (fetchAll...FromTheDatabase, arrayOfActiveUserAccountObjects, currentUserRecordObject) for names scaled to scope: descriptive activeUsers, conventional db, plural users, short arrow param user. Guards the cryptic pole by keeping real words rather than u/acc/arr soup, and lets the type annotation carry the type instead of the name.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "repository method with Get-prefix, stutter, and type-suffixed locals",
+          "url": "",
+          "before": "func (userRepository *UserRepository) GetUserByUserID(userIDString string) (*User, error) {\n    userResultObject, errorValue := userRepository.databaseHandle.FindUser(userIDString)\n    if errorValue != nil {\n        return nil, fmt.Errorf(\"get user: %w\", errorValue)\n    }\n    return userResultObject, nil\n}",
+          "after": "func (r *UserRepository) User(id string) (*User, error) {\n    u, err := r.db.FindUser(id)\n    if err != nil {\n        return nil, fmt.Errorf(\"find user %s: %w\", id, err)\n    }\n    return u, nil\n}",
+          "why": "Removes the Go-specific tells the rule names: the Get- prefix (method becomes User), package/type stutter, and type-suffixed locals (userIDString, errorValue) become idiomatic short locals (r, id, u, err). Guards the opposite pole by matching Go's density norm (very short locals) WITHOUT shrinking the wide-scope exported UserRepository or method name into one-letter soup.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (idiomatic illustrative code I wrote), not sourced from a specific repo, so no URLs are attached per the honesty rules. They deliberately cover Python/TS/Go since the ruleset's own before/after for this principle is already Python (cart_total).\n\nEach pair ties to the \"replaces\" anti-pattern from both directions: the before is the verbose type-echoing / over-qualified LLM style (theListOfActiveUserAccountObjects, calculate_total_for_all_items, GetUserByUserID), and every after explicitly guards the when_not (cryptic d/lst/tmp soup) by keeping wide-scope and domain identifiers descriptive while only tight local/loop scopes go short.\n\nTwo deliberate teaching choices: (1) the Python after keeps an explicit loop with good names rather than collapsing to sum(), so the example isolates naming from line-count minimization. (2) Density is tuned per language to demonstrate the host norm called out in when_apply \u2014 Python keeps `order`/`total` (moderately longer), Go uses `r`/`id`/`u`/`err` (very short locals). The Go example also covers the no-Get-prefix and no-stutter sub-rules, which are language-bound and not exercisable in the Python/TS pairs."
+    },
+    {
+      "principle_id": "match-surrounding-style",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "new repo function ignores the module's session/domain-error idiom",
+          "url": "",
+          "before": "# neighbors: def get_user(session, id) -> User: ... raise NotFoundError(...); logger = logging.getLogger(__name__)\ndef get_order(order_id):\n    conn = psycopg2.connect(DSN)            # neighbors take an injected session\n    cur = conn.cursor()\n    cur.execute(\"select * from orders where id=%s\", (order_id,))\n    row = cur.fetchone()\n    if not row:\n        print(f\"order {order_id} not found\")  # neighbors log + raise NotFoundError\n        return None\n    return {\"id\": row[0], \"total\": row[1]}      # neighbors return domain objects",
+          "after": "def get_order(session, order_id) -> Order:\n    row = session.execute(\n        select(Order).where(Order.id == order_id)\n    ).scalar_one_or_none()\n    if row is None:\n        raise NotFoundError(f\"order {order_id}\")\n    return row",
+          "why": "Mirrors the module's established idioms (injected session, ORM query, domain-object return, NotFoundError instead of print+None) so the added function is indistinguishable from its neighbors. When-not: matching is about local idioms, not terseness; if the surrounding pattern were genuinely unsafe you'd fix it deliberately across the scope, not copy it or silently add a third dialect.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "data-access fn imports promise-chain + snake_case into an async/AppError module",
+          "url": "",
+          "before": "// neighbors: export async function findUser(id: string): Promise<User> { ...; throw new AppError(`user ${id} not found`) }\nexport const get_invoice = (invoice_id: string) => {\n  return db.select().from(invoices).where(eq(invoices.id, invoice_id))\n    .then(rows => rows[0])\n    .catch(err => { console.error(err); return null })  // neighbors await + throw AppError\n}",
+          "after": "export async function getInvoice(invoiceId: string): Promise<Invoice> {\n  const [row] = await db.select().from(invoices).where(eq(invoices.id, invoiceId))\n  if (!row) throw new AppError(`invoice ${invoiceId} not found`)\n  return row\n}",
+          "why": "Conforms to the file's conventions: camelCase, async/await over .then/.catch chains, throwing AppError over swallow-and-return-null, and a typed Promise return matching siblings. When-not: blending in is not license to copy a harmful local pattern (e.g. if neighbors really did swallow errors, you'd fix that deliberately) and not an excuse to drop needed error handling for brevity.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "new Store method panics instead of returning wrapped errors like its neighbors",
+          "url": "",
+          "before": "// neighbors: func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {\n//   ... if err != nil { return nil, fmt.Errorf(\"get user %s: %w\", id, err) } }\nfunc (store *Store) GetOrder(orderId string) *Order {\n    row := store.db.QueryRow(\"select id, total from orders where id = ?\", orderId)\n    var o Order\n    if err := row.Scan(&o.ID, &o.Total); err != nil {\n        panic(\"could not scan order: \" + err.Error())  // neighbors return wrapped errors\n    }\n    return &o\n}",
+          "after": "func (s *Store) GetOrder(ctx context.Context, id string) (*Order, error) {\n    row := s.db.QueryRowContext(ctx, \"select id, total from orders where id = ?\", id)\n    var o Order\n    if err := row.Scan(&o.ID, &o.Total); err != nil {\n        return nil, fmt.Errorf(\"get order %s: %w\", id, err)\n    }\n    return &o, nil\n}",
+          "why": "Adopts the package's idioms: short receiver s, ctx-first signature with QueryRowContext, idiomatic id, and error-as-value with %w wrapping instead of a foreign panic/exception idiom. When-not: this is mirroring a sound local convention, not minimalism; if every method in the package were (wrongly) panicking, you'd correct it deliberately rather than add yet another error style.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three are synthetic per the honesty rules: this principle (match-surrounding-style) inherently requires showing a foreign idiom against established local conventions, and the brief itself notes there is almost no public before/after corpus for it (recommends injecting a foreign idiom into a file and showing the conforming fix). I did not fabricate any repo attribution. Spec drawn from ruleset.json principle id \"match-surrounding-style\" (before/after at lines 307-308) and brief.md theme G1 (lines 280-286). Each pair injects a cross-language idiom (raw driver+print+dict in Python; promise-chain+snake_case+swallow in TS; panic+long receiver in Go) into a module whose neighbors establish the opposite convention, and the \"why\" guards the when_not (don't propagate a genuinely harmful local pattern; matching is about idioms, not terseness). Coverage: python, typescript, go."
+    },
+    {
+      "principle_id": "solve-todays-problem-yagni",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "data-access fn grows knobs no caller sets",
+          "url": "",
+          "before": "def fetch_recent_orders(\n    customer_id: int,\n    *,\n    limit: int = 50,\n    order_by: str = \"created_at\",\n    descending: bool = True,\n    include_archived: bool = False,\n    as_dict: bool = False,\n) -> list[Order]:\n    q = \"SELECT * FROM orders WHERE customer_id = %s\"\n    if not include_archived:\n        q += \" AND archived = false\"\n    q += f\" ORDER BY {order_by} {'DESC' if descending else 'ASC'} LIMIT {limit}\"\n    rows = db.execute(q, [customer_id]).fetchall()\n    return [dict(r) for r in rows] if as_dict else [Order.from_row(r) for r in rows]\n\n# every call site is: fetch_recent_orders(cid)",
+          "after": "def fetch_recent_orders(customer_id: int) -> list[Order]:\n    rows = db.execute(\n        \"SELECT * FROM orders WHERE customer_id = %s AND archived = false \"\n        \"ORDER BY created_at DESC LIMIT 50\",\n        [customer_id],\n    ).fetchall()\n    return [Order.from_row(r) for r in rows]",
+          "why": "Shows the over-parameterized-signature anti-pattern where every caller passes the same defaults; the speculative order_by knob even opens a SQL-injection hole. When-NOT: the moment a second caller genuinely needs, say, a different limit, add that one parameter then -- don't pre-emptively delete legitimate flexibility a real caller already uses.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "enqueue options object with fields nobody passes",
+          "url": "",
+          "before": "interface EnqueueOptions {\n  priority?: number\n  delayMs?: number\n  maxRetries?: number\n  backoff?: \"fixed\" | \"exponential\"\n  dedupeKey?: string\n  onComplete?: (id: string) => void\n}\n\nasync function enqueueEmail(\n  to: string,\n  body: string,\n  opts: EnqueueOptions = {},\n): Promise<string> {\n  // every call site is enqueueEmail(to, body)\n  return queue.add(\"email\", { to, body }, opts)\n}",
+          "after": "async function enqueueEmail(to: string, body: string): Promise<string> {\n  return queue.add(\"email\", { to, body })\n}",
+          "why": "Demonstrates a speculative options bag invented from zero call sites that vary it -- every field is dead surface a reader must understand. When-NOT: this is not a license to drop options a published/library API documents for external callers, nor to inline a knob a second internal caller actually sets today.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "functional-options ceremony for a single NewCache() call",
+          "url": "",
+          "before": "type Option func(*Cache)\n\nfunc WithTTL(d time.Duration) Option     { return func(c *Cache) { c.ttl = d } }\nfunc WithMaxEntries(n int) Option        { return func(c *Cache) { c.max = n } }\nfunc WithEvictionPolicy(p string) Option { return func(c *Cache) { c.policy = p } }\n\nfunc NewCache(opts ...Option) *Cache {\n\tc := &Cache{ttl: 5 * time.Minute, max: 1000, policy: \"lru\"}\n\tfor _, opt := range opts {\n\t\topt(c)\n\t}\n\treturn c\n}\n\n// only call site: NewCache()",
+          "after": "func NewCache() *Cache {\n\treturn &Cache{ttl: 5 * time.Minute, max: 1000}\n}",
+          "why": "Captures the Go variadic functional-options pattern scaffolded for one concrete, optionless caller -- three exported Option helpers and a loop that never runs. When-NOT: if NewCache were an exported constructor with real external users, or a second caller needed to vary TTL, the options pattern earns its keep; pick a sensible internal default until then.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (idiomatic, illustrative) -- no sourced permalinks, so honesty rules keep them untagged as sourced. They map directly to the \"replaces\" anti-patterns in the ruleset: over-parameterized signatures where every call site passes the same args (Python), speculative generality/config knobs with no current caller (TS options bag), and generic mechanisms/extension hooks for a single concrete use (Go functional options). Each \"why\" guards the when_not pole (real differing callers or published/library extension points justify the option) so the examples teach appropriate expressiveness, not blanket parameter-stripping. Languages cover python/typescript/go for full corpus spread. Source spec: /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id solve-todays-problem-yagni); theme context in /home/markmarosi/projects/engineer/research/brief.md section C4."
+    },
+    {
+      "principle_id": "information-hiding-stable-boundaries",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "repository returns ORM model, leaking *_cents schema to HTTP layer",
+          "url": "",
+          "before": "class OrderModel(Base):              # SQLAlchemy table mapping\n    __tablename__ = \"orders\"\n    id = Column(Integer, primary_key=True)\n    total_cents = Column(Integer)\n    internal_version = Column(Integer)\n\ndef get_order(order_id: int) -> OrderModel:\n    return session.get(OrderModel, order_id)   # raw ORM row goes up the stack\n\n# routes.py now depends on the column layout:\n#   o = get_order(id)\n#   return {\"id\": o.id, \"total\": o.total_cents / 100}",
+          "after": "@dataclass(frozen=True)\nclass Order:\n    id: int\n    total: Decimal\n\ndef get_order(order_id: int) -> Order:\n    row = session.get(OrderModel, order_id)\n    return Order(id=row.id, total=Decimal(row.total_cents) / 100)\n\n# routes.py depends only on Order.total; the cents storage choice\n# and internal_version stay hidden inside the repository.",
+          "why": "Shows mapping the ORM row into a domain Order at the repository boundary so the storage unit (cents) and internal columns don't leak to the HTTP layer. When-NOT: inside the data-access module you may pass OrderModel around freely; don't add this dataclass+mapping where there is no real boundary to protect.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "service returns raw DB row, leaking password_hash and snake_case columns",
+          "url": "",
+          "before": "// userService.ts \u2014 hands the raw DB row straight to the API layer\nexport async function getUser(id: string) {\n  return db.query.users.findFirst({ where: eq(users.id, id) });\n  // row: { id, email, password_hash, stripe_customer_id, created_at }\n}\n\n// route.ts\napp.get(\"/users/:id\", async (req, res) => {\n  res.json(await getUser(req.params.id)); // leaks password_hash + schema to the wire\n});",
+          "after": "export interface User {\n  id: string;\n  email: string;\n  createdAt: Date;\n}\n\nexport async function getUser(id: string): Promise<User | null> {\n  const row = await db.query.users.findFirst({ where: eq(users.id, id) });\n  if (!row) return null;\n  return { id: row.id, email: row.email, createdAt: row.created_at };\n}",
+          "why": "Returning a domain User hides the table layout and keeps secrets (password_hash) and storage-shaped names off the boundary, so a column rename doesn't ripple into routes. When-NOT: helpers living inside userService.ts can share the row type directly; don't mint a DTO per function where the row never crosses a module boundary.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "repository returns sql.NullString driver types across its boundary",
+          "url": "",
+          "before": "// Leaks database/sql driver types out of the repository.\ntype UserRow struct {\n    ID        int64\n    Email     string\n    AvatarURL sql.NullString\n    DeletedAt sql.NullTime\n}\n\nfunc (r *Repo) GetUser(ctx context.Context, id int64) (UserRow, error) {\n    var u UserRow\n    err := r.db.QueryRowContext(ctx,\n        `SELECT id, email, avatar_url, deleted_at FROM users WHERE id=$1`, id).\n        Scan(&u.ID, &u.Email, &u.AvatarURL, &u.DeletedAt)\n    return u, err // every caller must understand sql.NullString\n}",
+          "after": "type User struct {\n    ID        int64\n    Email     string\n    AvatarURL string // \"\" when absent\n}\n\nfunc (r *Repo) GetUser(ctx context.Context, id int64) (User, error) {\n    var (\n        u      User\n        avatar sql.NullString\n    )\n    err := r.db.QueryRowContext(ctx,\n        `SELECT id, email, avatar_url FROM users WHERE id=$1`, id).\n        Scan(&u.ID, &u.Email, &avatar)\n    u.AvatarURL = avatar.String\n    return u, err\n}",
+          "why": "The domain User exposes plain Go types and keeps database/sql driver types (sql.NullString/NullTime) and soft-delete columns inside the repo, so callers aren't coupled to the storage layer. When-NOT: an unexported scan helper used only within the data-access package can keep the NullString form; the mapping earns its place only at the exported boundary.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (no verifiable sourced diff with line anchors was confidently available for this specific refactor; per honesty rules synthetic is preferred over a shaky citation). They cover the full python/typescript/go corpus. Each ties directly to the rule's \"replaces\" anti-pattern: returning raw ORM models, DB rows, or driver-specific types from a repository up to the HTTP/business layer. Each \"why\" guards the when_not pole (no mapping layer where there is no real boundary / internal helpers may share representation). Per-side line counts are within 5-20; comment lines in the Python/TS \"before\" sketch the cross-boundary leak the rule targets."
+    },
+    {
+      "principle_id": "pure-seams-explicit-dependencies",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "totals threaded through self-state instead of returned",
+          "url": "",
+          "before": "class PriceCalculator:\n    def total(self, items):\n        self.items = items          # stash args as instance state\n        self.subtotal = 0\n        self._sum()                 # mutates self.subtotal\n        self._discount()            # reads/mutates self.subtotal\n        return self.subtotal\n\n    def _sum(self):\n        for i in self.items:\n            self.subtotal += i.price * i.qty\n\n    def _discount(self):\n        if self.subtotal > 100:\n            self.subtotal *= 0.9",
+          "after": "def order_total(items: list[Item]) -> float:\n    subtotal = sum(i.price * i.qty for i in items)\n    return subtotal * 0.9 if subtotal > 100 else subtotal",
+          "why": "Shows the PrimeGenerator tell: helpers take no args and communicate only through self, so they aren't reentrant or independently testable; the fix makes the seam pure (value in, value out). when-NOT: don't read this as 'never hold state' \u2014 an object whose state is its purpose (a streaming aggregator, an open buffer) legitimately keeps it.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "per-request data stashed on a singleton service",
+          "url": "",
+          "before": "class OrderService {\n  private cart!: CartItem[]\n  private userId!: string\n\n  handle(req: OrderRequest): number {\n    this.cart = req.cart            // hide params as instance state\n    this.userId = req.userId\n    return this.computeTotal()      // no args; reads hidden this.cart\n  }\n\n  private computeTotal(): number {\n    // singleton: concurrent requests overwrite this.cart -> wrong totals\n    return this.cart.reduce((sum, i) => sum + i.price * i.qty, 0)\n  }\n}",
+          "after": "function computeTotal(cart: CartItem[]): number {\n  return cart.reduce((sum, i) => sum + i.price * i.qty, 0)\n}\n\nclass OrderService {\n  handle(req: OrderRequest): number {\n    return computeTotal(req.cart)   // dependency explicit; no shared state\n  }\n}",
+          "why": "Demonstrates that shortening signatures by parking request data on a shared singleton is a real concurrency bug, not just a style nit; the explicit parameter is safe and testable. when-NOT: a per-connection/per-session object (a WebSocket session, an open DB transaction) carrying state is fine \u2014 the target is ambient shared-mutable singletons.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "package-global counter mutated by a free function",
+          "url": "",
+          "before": "// package-level mutable state shared by every caller\nvar lastID int64\n\nfunc NextID() int64 {\n    lastID++        // data race under concurrent requests\n    return lastID\n}",
+          "after": "type IDSequence struct {\n    n atomic.Int64\n}\n\n// Next is safe for concurrent use; state is owned, not ambient.\nfunc (s *IDSequence) Next() int64 {\n    return s.n.Add(1)\n}",
+          "why": "Shows ambient package-global mutation (hidden dependency + data race + untestable) turned into an owned, injectable dependency. when-NOT: the fix is itself stateful \u2014 the enemy was the hidden package-level singleton, not statefulness; a struct with a coherent lifecycle is the correct home for that state.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three are synthetic, idiomatic backend snippets (no repo attribution), covering python/typescript/go. They map to the rule's \"replaces\" (hiding parameters as mutable class/global state, spooky action at a distance, Clean Code PrimeGenerator) and each \"why\" guards the when_not (genuinely stateful objects with a coherent lifecycle are fine). The Go after deliberately keeps state in an owned struct to model that the target is hidden/ambient state, not all state. Spec source: /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id pure-seams-explicit-dependencies); theme B5 in /home/markmarosi/projects/engineer/research/brief.md. Did not cite real permalinks because no reliably fetchable diff cleanly demonstrating \"param promoted to hidden state\" was confirmed; honesty rules prefer labeled synthetic over a shaky citation."
+    },
+    {
+      "principle_id": "types-at-boundaries-no-escape-hatches",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "API handler: `as` cast + parallel interface that drifts",
+          "url": "",
+          "before": "// hand-maintained type, separate from any validation -> silently drifts\ninterface CreateUser {\n  email: string\n  age: number\n}\n\nrouter.post(\"/users\", async (req, res) => {\n  const input = req.body as CreateUser   // cast asserts a shape nothing checks\n  const user = await db.users.create(input)\n  res.json(user)\n})",
+          "after": "const CreateUser = z.object({\n  email: z.string().email(),\n  age: z.number().int().min(0),\n})\ntype CreateUser = z.infer<typeof CreateUser>   // single source of truth\n\nrouter.post(\"/users\", async (req, res) => {\n  const input = CreateUser.parse(req.body)     // validated at boundary -> typed\n  const user = await db.users.create(input)\n  res.json(user)\n})",
+          "why": "Shows deriving the type from the schema (no parallel interface to drift) and replacing `as` (which asserts a shape the runtime never verifies) with boundary parsing. When-NOT: don't re-parse already-trusted values on every internal hop, and keep passing the concrete typed `input` inward rather than re-validating it.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "Webhook handler: cast(dict[str, Any]) + over-annotated locals",
+          "url": "",
+          "before": "def handle_payment(body: bytes) -> dict[str, Any]:\n    data = cast(dict[str, Any], json.loads(body))  # cast asserts shape, checks nothing\n    user_id: str = data[\"user_id\"]                 # over-annotated local; KeyError at runtime\n    amount: int = int(data[\"amount_cents\"])\n    return {\"charged\": charge(user_id, amount)}",
+          "after": "class Payment(BaseModel):\n    user_id: str\n    amount_cents: int\n\ndef handle_payment(body: bytes) -> ChargeResult:\n    payment = Payment.model_validate_json(body)   # parse at boundary -> typed\n    return charge(payment.user_id, payment.amount_cents)",
+          "why": "Replaces an unchecked `cast` (an escape hatch that lies to the checker) with real boundary validation, and lets inference carry the obvious `payment` local instead of annotating it. When-NOT: don't add a Pydantic model for data your own code already produced and trusts, and keep the public signature annotated (the boundary) even as you drop ceremony on locals.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "Config loader: non-null `!` silencing string | undefined",
+          "url": "",
+          "before": "function loadConfig(): Config {\n  const url = process.env.DATABASE_URL!        // ! hides string | undefined\n  const port = Number(process.env.PORT!)       // NaN if unset, no error\n  return { url, port }\n}",
+          "after": "function loadConfig(): Config {\n  const url = process.env.DATABASE_URL\n  if (!url) throw new Error(\"DATABASE_URL is required\")  // check at the edge\n  const port = Number(process.env.PORT ?? \"8080\")\n  return { url, port }\n}",
+          "why": "Demonstrates replacing the non-null `!` escape hatch with a real runtime check at the config boundary, where the value genuinely can be absent. When-NOT: at a provably-safe library edge a cast is acceptable if paired with an assertion and a justifying comment; the point is env vars are not that edge, so check them.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Principle is language-bound to Python and TypeScript; the spec marks it explicitly N/A for Go (mandatorily typed), so no Go example is appropriate for this rule. All three pairs are synthetic: these are canonical, well-documented patterns (Zod `z.infer` single-source-of-truth, Pydantic `model_validate_json` boundary parsing, TS non-null `!` removal), but I could not find a single public diff that cleanly shows the exact before->after with a verifiable line-anchored permalink, so per the honesty rules I tagged them synthetic rather than attach an uncertain citation. The set covers both failure poles the rule replaces: escape hatches (`cast`, `as`, `!`) and over-annotated trivial locals, plus the parallel-type-drift anti-pattern. Each `why` guards the opposite (minimalism) pole so the examples model appropriate expressiveness, not blanket annotation removal. Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id types-at-boundaries-no-escape-hatches) with theme context from /home/markmarosi/projects/engineer/research/brief.md (F3)."
+    },
+    {
+      "principle_id": "accept-interfaces-small-and-consumer-side",
+      "examples": [
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "report reader takes fat implementer-side Storage interface",
+          "url": "",
+          "before": "// package storage \u2014 interface declared next to the implementation\ntype Storage interface {\n\tGet(ctx context.Context, key string) ([]byte, error)\n\tPut(ctx context.Context, key string, val []byte) error\n\tDelete(ctx context.Context, key string) error\n\tList(ctx context.Context, prefix string) ([]string, error)\n\tClose() error\n}\n\n// package report \u2014 forced to depend on all 5 methods just to read one blob\nfunc Render(s storage.Storage, key string) ([]byte, error) {\n\treturn s.Get(context.Background(), key)\n}",
+          "after": "// package report \u2014 declare only the behavior this consumer actually uses\ntype blobGetter interface {\n\tGet(ctx context.Context, key string) ([]byte, error)\n}\n\nfunc Render(g blobGetter, key string) ([]byte, error) {\n\treturn g.Get(context.Background(), key)\n}",
+          "why": "Shows the Go idiom: accept a one-method interface defined at the consumer (unexported, named for behavior) instead of importing a fat God-interface from the implementer package; any *storage.S3, *storage.Disk, or a test fake satisfies it structurally. When-NOT: if Render genuinely needed Get+Put+Delete, declare those three rather than splitting one interface per method, and a deliberately published API may keep a wider stable interface.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "greet() depends on whole UserRepository to read one record",
+          "url": "",
+          "before": "interface UserRepository {\n  findById(id: string): Promise<User>;\n  save(u: User): Promise<void>;\n  delete(id: string): Promise<void>;\n  findAll(): Promise<User[]>;\n  count(): Promise<number>;\n}\n\nasync function greet(repo: UserRepository, id: string): Promise<string> {\n  const user = await repo.findById(id);\n  return `Hello, ${user.name}`;\n}",
+          "after": "// accept only the capability this function uses, narrowed at the call site\ntype FindsUser = Pick<UserRepository, \"findById\">;\n\nasync function greet(repo: FindsUser, id: string): Promise<string> {\n  const user = await repo.findById(id);\n  return `Hello, ${user.name}`;\n}",
+          "why": "Demonstrates interface segregation in TS via Pick: the consumer declares the minimal structural shape it depends on, so a stub or a partial fake satisfies greet without the full repository. When-NOT: don't narrow to one method when the function legitimately calls several (then Pick the real set), and don't invent a brand-new interface when the concrete type is fine and never substituted.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "config loader hard-depends on the concrete S3 client",
+          "url": "",
+          "before": "class S3Client:\n    def get_object(self, bucket: str, key: str) -> bytes: ...\n    def put_object(self, bucket: str, key: str, body: bytes) -> None: ...\n    def delete_object(self, bucket: str, key: str) -> None: ...\n    def list_objects(self, bucket: str) -> list[str]: ...\n\ndef load_config(client: S3Client, key: str) -> dict:\n    raw = client.get_object(\"configs\", key)\n    return json.loads(raw)",
+          "after": "from typing import Protocol\n\nclass ObjectGetter(Protocol):\n    def get_object(self, bucket: str, key: str) -> bytes: ...\n\ndef load_config(client: ObjectGetter, key: str) -> dict:\n    raw = client.get_object(\"configs\", key)\n    return json.loads(raw)",
+          "why": "Shows the Python analog: a small structural Protocol named for the one behavior used, so the real boto3 client and an in-memory fake both satisfy load_config without inheritance. When-NOT: don't add a Protocol when the function is only ever called with the concrete client and never substituted (a plain type hint suffices), and don't list methods the body doesn't call \u2014 introduce the seam when a real test double or second backend exists.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic and idiomatic, covering go/typescript/python so the corpus spans all three languages for this rule. Each ties to the \"replaces\" anti-patterns: implementer-side fat God-interface (Go), depending on a whole repository interface to use one method (TS interface segregation via Pick), and hard-coupling to a concrete heavy SDK client vs a minimal consumer-side Protocol (Python). I considered sourcing real diffs but the canonical references for this rule (Go CodeReviewComments \"Interfaces\" section, go-proverbs \"accept interfaces, return structs\", io.Reader/io.Writer) are documentation/library API, not before->after diffs with line anchors; rather than risk a fabricated or unfetchable permalink I kept these synthetic per the honesty rules. Each \"why\" guards the opposite pole (don't over-narrow below what the body uses; don't introduce an interface with no real second implementation or test seam; published APIs may expose a deliberate interface), matching the principle's when_not. Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id accept-interfaces-small-and-consumer-side) and theme C5 in /home/markmarosi/projects/engineer/research/brief.md."
+    },
+    {
+      "principle_id": "prefer-clear-over-clever",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "shipping cost crammed into one nested-ternary expression",
+          "url": "",
+          "before": "def shipping_cost(weight_kg, country, express):\n    return (0 if weight_kg == 0 else\n            (5 if country == \"US\" else 12) * (2 if express else 1)\n            + (3 if weight_kg > 10 else 0))",
+          "after": "def shipping_cost(weight_kg: float, country: str, express: bool) -> int:\n    if weight_kg == 0:\n        return 0\n    base = 5 if country == \"US\" else 12\n    rate = base * 2 if express else base\n    heavy_surcharge = 3 if weight_kg > 10 else 0\n    return rate + heavy_surcharge",
+          "why": "Shows binding each pricing decision to a named local so the rule is reviewable line by line, the point of clear-over-clever. Note the after KEEPS the simple two-way ternaries (base = 5 if ... else 12); the when_not is that a well-understood one-liner shouldn't be inflated into if/else ceremony, only the dense compound expression is unpacked.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "authorization check as a nested ternary",
+          "url": "",
+          "before": "function canEdit(u: User, doc: Doc): boolean {\n  return u.role === \"admin\"\n    ? true\n    : u.role === \"editor\"\n    ? doc.ownerId === u.id\n      ? true\n      : doc.shared\n    : false\n}",
+          "after": "function canEdit(u: User, doc: Doc): boolean {\n  if (u.role === \"admin\") return true\n  if (u.role !== \"editor\") return false\n  return doc.ownerId === u.id || doc.shared\n}",
+          "why": "Demonstrates that a genuinely NESTED ternary (a ? : (b ? : c) : ) carries real cognitive load and reads far better as ordered guard clauses plus a plain boolean. The when_not guard: a flat single ternary like score > 0 ? \"pass\" : \"fail\" is already clear and should be left alone, this is not a blanket ban on ?:.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "pagination slice with inline min() calls",
+          "url": "",
+          "before": "func page(items []Item, pageNum, size int) []Item {\n    return items[min(pageNum*size, len(items)):min(pageNum*size+size, len(items))]\n}",
+          "after": "func page(items []Item, pageNum, size int) []Item {\n    start := min(pageNum*size, len(items))\n    end := min(start+size, len(items))\n    return items[start:end]\n}",
+          "why": "Shows that off-by-one-prone slice bounds are easy to verify when start and end are named locals, instead of two clever min() calls buried in the slice expression. The when_not: a plain items[a:b] needs no such expansion, the fix targets only the bound arithmetic that a reader otherwise has to recompute mentally.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id prefer-clear-over-clever) and the F2 entry in /home/markmarosi/projects/engineer/research/brief.md. The brief explicitly flags the ruleset's own default before/after (a 3-condition comprehension expanded into nested loops) as itself the overcorrection this rule warns against, so I deliberately avoided that pattern and used genuinely dense constructs (nested ternaries, inline min() slice bounds) per the brief's recommendation. All three examples are synthetic: I did not have verifiable public permalinks for clean-over-clever refactor diffs, and per the honesty rules a realistic synthetic pair is preferred over an unverifiable citation. Each after intentionally preserves simple, well-understood one-liners (flat ternaries, plain slices) to model appropriate expressiveness rather than minimalism, covering the when_not. Languages cover python, typescript, and go."
+    },
+    {
+      "principle_id": "scope-refactors-chestertons-fence",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "ETL export drops a guard it didn't understand",
+          "url": "",
+          "before": "# task: add `region` to the exported row\ndef export_rows(records):\n    # agent also rewrote the loop into a comprehension and removed the ts==0 skip\n    return [\n        {\"id\": r.id, \"amount\": r.amount, \"region\": r.region}\n        for r in records\n    ]",
+          "after": "# task: add `region` to the exported row -> add exactly that\ndef export_rows(records):\n    out = []\n    for r in records:\n        # Vendor sends ts=0 for backfilled rows; exporting them double-counts (DATA-712).\n        if r.ts == 0:\n            continue\n        out.append({\"id\": r.id, \"amount\": r.amount, \"region\": r.region})\n    return out",
+          "why": "Shows Chesterton's fence: the ts==0 skip looks redundant but is a paid-for bug fix, so a one-field task must add the field and leave it. when_not: if the task were explicitly 'clean up export_rows', rewriting the loop and re-justifying the guard would be legitimate, not scope creep.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "const bump silently deletes 429/Retry-After branch",
+          "url": "",
+          "before": "const maxAttempts = 5 // was 3\n\nfunc doWithRetry(req *http.Request) (*http.Response, error) {\n    // agent also \"simplified\" the loop, dropping the 429/Retry-After branch\n    for attempt := 0; attempt < maxAttempts; attempt++ {\n        resp, err := client.Do(req)\n        if err == nil {\n            return resp, nil\n        }\n        time.Sleep(backoff(attempt))\n    }\n    return nil, errExhausted\n}",
+          "after": "const maxAttempts = 5 // was 3 -- the only change the task asked for\n\nfunc doWithRetry(req *http.Request) (*http.Response, error) {\n    for attempt := 0; attempt < maxAttempts; attempt++ {\n        resp, err := client.Do(req)\n        if err == nil && resp.StatusCode != http.StatusTooManyRequests {\n            return resp, nil\n        }\n        // Upstream 429s are spurious under load; honor Retry-After (INC-481).\n        sleep := backoff(attempt)\n        if resp != nil && resp.StatusCode == http.StatusTooManyRequests {\n            sleep = retryAfter(resp)\n        }\n        time.Sleep(sleep)\n    }\n    return nil, errExhausted\n}",
+          "why": "A one-line config change (3->5) should not touch the retry body; deleting the 429 special-case is removing a fence whose purpose (a real outage workaround) wasn't understood. when_not: if reviewers had confirmed the 429 handling is now dead/wrong and the task covered the retry path, removing it deliberately would be fine.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "one-field add churns the whole handler",
+          "url": "",
+          "before": "// task: add `phone` to the update payload\nexport const updateUser = async (request: Request, response: Response) => {\n  const payload = request.body                       // renamed u -> payload\n  const errors = validate(payload)                   // new validator nobody asked for\n  if (errors.length) return response.status(422).json({ errors }) // changed 400 -> 422\n  try {                                               // wrapped in unrequested try/catch\n    const result = await repo.save({ name: payload.name, email: payload.email, phone: payload.phone })\n    return response.status(200).json(result)\n  } catch (e) { return response.status(500).json({ error: String(e) }) }\n}",
+          "after": "// task: add `phone` to the update payload -> add exactly that\nexport async function updateUser(req: Request, res: Response) {\n  const u = req.body\n  if (!u.email) return res.status(400).json({ error: \"email required\" })\n  const saved = await repo.save({ name: u.name, email: u.email, phone: u.phone })\n  return res.json(saved)\n}",
+          "why": "Demonstrates scope discipline: the only needed edit is `phone`, so renaming locals, swapping 400->422, adding a validator, and wrapping in try/catch is diff-inflating scope creep that hides the real change in review. when_not: if those were genuine defects in the direct path of the change (e.g. the handler truly lacked validation), fixing them deliberately and calling it out would be warranted.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic (kind=\"synthetic\") and not attributed to any repo. This rule is about diff discipline in agentic edits, so the \"bad\" state is an over-scoped PR/rewrite, which is hard to cite as a single clean, independently-verifiable public diff; per the honesty rules I chose idiomatic synthetic examples over a risky citation. Coverage spans python/go/typescript. Two pairs (python, go) target the Chesterton's-fence facet (deleting a guard/branch whose purpose is a paid-for bug fix), one (typescript) targets the scope-creep facet (renames/restructuring/status-code changes piggybacked on a one-field task). Each `before` ties to the \"replaces\" anti-pattern (agent helpfully restructures error handling, renames symbols, or deletes branches during a small change); each `why` guards the when_not pole (explicit refactor tasks or in-path broken windows are legitimate when done deliberately, not as silent scope creep). Spec source: /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id scope-refactors-chestertons-fence) and brief theme G2 in /home/markmarosi/projects/engineer/research/brief.md."
+    },
+    {
+      "principle_id": "bound-the-unbounded",
+      "examples": [
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "unbounded job poll loop hangs the request",
+          "url": "",
+          "before": "def wait_for_export(job_id):\n    done = False\n    while not done:  # no cap; spins forever if upstream never finishes\n        resp = client.get(f\"/exports/{job_id}\")\n        if resp.json()[\"state\"] == \"ready\":\n            done = True\n            return resp.json()[\"url\"]\n        time.sleep(2)",
+          "after": "MAX_POLLS = 60  # ~2 min at 2s; export SLA is 90s\n\ndef wait_for_export(job_id: str) -> str:\n    for _ in range(MAX_POLLS):\n        resp = client.get(f\"/exports/{job_id}\")\n        if resp.json()[\"state\"] == \"ready\":\n            return resp.json()[\"url\"]\n        time.sleep(2)\n    raise TimeoutError(f\"export {job_id} not ready after {MAX_POLLS} polls\")",
+          "why": "Replaces an open-ended `while not done` poll that depends on the upstream behaving with a bounded loop that fails loudly when exhausted. when-NOT: the cap is derived from the real SLA (operating envelope), and it adds exactly one bound rather than carpeting the function with assertions for impossible states.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "cursor pagination trusts upstream to terminate",
+          "url": "",
+          "before": "async function fetchAllContacts(): Promise<Contact[]> {\n  const all: Contact[] = [];\n  let cursor: string | undefined;\n  do {\n    const page = await api.contacts.list({ cursor }); // unbounded\n    all.push(...page.items);\n    cursor = page.nextCursor;\n  } while (cursor);\n  return all;\n}",
+          "after": "const MAX_PAGES = 500; // 500 * 100/page = 50k, above tenant ceiling\n\nasync function fetchAllContacts(): Promise<Contact[]> {\n  const all: Contact[] = [];\n  let cursor: string | undefined;\n  for (let page = 0; page < MAX_PAGES; page++) {\n    const res = await api.contacts.list({ cursor });\n    all.push(...res.items);\n    if (!res.nextCursor) return all;\n    cursor = res.nextCursor;\n  }\n  throw new Error(`pagination exceeded ${MAX_PAGES} pages; cursor likely looping`);\n}",
+          "why": "Bounds a pagination fan-out whose accumulator would OOM the process if a buggy or looping cursor never ends. when-NOT: the cap is set above the legitimate data ceiling so it never truncates real paging \u2014 it trips only on a genuine bug and fails loudly instead of silently returning a partial list.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "infinite reconnect loop blocks the caller",
+          "url": "",
+          "before": "func publish(ctx context.Context, msg []byte) error {\n    for { // retries forever; a permanently-down broker hangs the caller\n        if err := broker.Send(ctx, msg); err == nil {\n            return nil\n        }\n        time.Sleep(time.Second)\n    }\n}",
+          "after": "const maxAttempts = 5\n\nfunc publish(ctx context.Context, msg []byte) error {\n    var err error\n    for attempt := 0; attempt < maxAttempts; attempt++ {\n        if err = broker.Send(ctx, msg); err == nil {\n            return nil\n        }\n        time.Sleep(time.Second << attempt) // exponential backoff\n    }\n    return fmt.Errorf(\"publish failed after %d attempts: %w\", maxAttempts, err)\n}",
+          "why": "Replaces an unbounded `for {}` retry with a bounded one that surfaces the last error via %w, the Go error-as-value idiom. when-NOT: it bounds the retry count only and propagates the real failure \u2014 no assertion noise for impossible states, and the legitimate work itself is not capped.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json (principle id \"bound-the-unbounded\") and theme D6 in /home/markmarosi/projects/engineer/research/brief.md.\n\nAll three examples are synthetic (kind=\"synthetic\"): idiomatic illustrative pairs, no repo attribution. I considered sourcing a real diff that adds a MAX_RETRIES-style bound, but a verifiable before->after needs a commit/PR diff URL I could fetch and confirm, and the principle's only cited source is TigerBeetle TIGER_STYLE.md (a style doc, not a diff). Per the honesty rules, synthetic is preferred over an uncertain citation.\n\nCoverage: python / typescript / go (all three). Each ties to the \"replaces\" anti-pattern (unbounded `while not done` retry/poll loops) and each guards the when_not pole: the cap reflects the real operating envelope (SLA / data ceiling / attempt count), it fails loudly when exhausted, and it does NOT add TigerBeetle-grade assertions for impossible states or cap legitimate streaming/paging work."
+    },
+    {
+      "principle_id": "exhaustive-variant-handling",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "notification dispatch: silent else fall-through vs exhaustive switch",
+          "url": "",
+          "before": "type Notification =\n  | { kind: 'email'; to: string }\n  | { kind: 'sms'; phone: string }\n  | { kind: 'push'; deviceId: string }\n\nfunction render(n: Notification): string {\n  if (n.kind === 'email') return `Email to ${n.to}`\n  else if (n.kind === 'sms') return `SMS to ${n.phone}`\n  else return `Push to ${n.deviceId}` // a future 'webhook' kind silently renders as a push\n}",
+          "after": "function render(n: Notification): string {\n  switch (n.kind) {\n    case 'email': return `Email to ${n.to}`\n    case 'sms':   return `SMS to ${n.phone}`\n    case 'push':  return `Push to ${n.deviceId}`\n    default: {\n      const _exhaustive: never = n // compile error the moment a new kind is added\n      throw new Error(`unhandled notification: ${JSON.stringify(_exhaustive)}`)\n    }\n  }\n}",
+          "why": "Shows the TS-specific `never` trick turning 'I forgot a case' into a compile error instead of a silent wrong result. When-NOT: this is right because the channel set is closed and edited in one place; if channels were a third-party plugin registry where callers add handlers without touching render(), a registry/polymorphic dispatch would be the correct tool, not a switch.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "transaction settlement: defaulting else vs match + assert_never",
+          "url": "",
+          "before": "def settle(txn: Txn) -> Decimal:\n    if txn.kind == \"charge\":\n        return txn.amount\n    elif txn.kind == \"refund\":\n        return -txn.amount\n    else:\n        return Decimal(0)  # a new \"chargeback\" kind is silently settled as 0",
+          "after": "from typing import assert_never  # txn.kind: Literal['charge','refund','chargeback']\n\ndef settle(txn: Txn) -> Decimal:\n    match txn.kind:\n        case \"charge\":\n            return txn.amount\n        case \"refund\":\n            return -txn.amount\n        case \"chargeback\":\n            return -txn.amount - txn.fee\n        case _:\n            assert_never(txn.kind)  # mypy/pyright error if any kind is unhandled",
+          "why": "Demonstrates that Python gets static exhaustiveness too via a Literal discriminant + typing.assert_never, replacing a catch-all else that swallows new kinds. When-NOT: appropriate because transaction kinds are a fixed, finite enum; if kinds were dynamically registered handlers (an open plugin set), a dispatch dict / Protocol-based polymorphism would be the right design instead of a closed match.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "pricing tiers: premature interface hierarchy vs enum switch",
+          "url": "",
+          "before": "// Premature polymorphism for two fixed, never-extended cases.\ntype Pricer interface{ Price(cents int64) int64 }\ntype Standard struct{}\nfunc (Standard) Price(c int64) int64 { return c }\ntype Premium struct{}\nfunc (Premium) Price(c int64) int64 { return c + c/10 }\n\nfunc pricerFor(tier string) Pricer {\n    if tier == \"premium\" { return Premium{} }\n    return Standard{} // unknown tier silently priced as Standard\n}",
+          "after": "type Tier int\nconst (\n    Standard Tier = iota\n    Premium\n)\n\nfunc price(t Tier, cents int64) (int64, error) {\n    switch t {\n    case Standard: return cents, nil\n    case Premium:  return cents + cents/10, nil\n    default:       return 0, fmt.Errorf(\"unhandled tier: %d\", t)\n    }\n}",
+          "why": "Covers the other anti-pattern in 'replaces': a class/interface hierarchy + factory for two fixed cases is heavier and slower than a switch over an enum. The explicit default returning an error (paired with the `exhaustive` linter) is Go's stand-in for `never`, instead of silently defaulting. When-NOT: if pricing strategies were genuinely open and added by other packages without editing this function, the Pricer interface would be the correct, intentional use of polymorphism.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three examples are synthetic and idiomatic; no real-repo attribution is made. Per the honesty rules I avoided citing permalinks I could not guarantee would fetch with the exact transformation. Coverage: TypeScript (canonical discriminated-union + `never` check, the core of the rule), Python (Literal discriminant + typing.assert_never for static exhaustiveness, 3.11+), Go (enum switch with error-returning default, also illustrating the second 'replaces' pole: switch beats a premature interface hierarchy for a small closed set). Each before maps to a distinct anti-pattern in the spec: TS/Python show silent else fall-through; Go shows premature polymorphism. Every 'why' guards the when_not (open-ended sets -> polymorphism/extension; `never` is TS-specific) so the pairs teach appropriate expressiveness rather than blanket switch-everything. Source spec read from /home/markmarosi/projects/engineer/research/data/ruleset.json."
+    },
+    {
+      "principle_id": "minimal-public-surface",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "API route exports a single-use DTO mapper",
+          "url": "",
+          "before": "// routes/users.ts\nexport const toUserDTO = (row: UserRow) => ({\n  id: row.id,\n  name: row.full_name,\n  joinedAt: row.created_at.toISOString(),\n})\n\nexport async function getUser(req: Request, res: Response) {\n  const row = await db.users.findById(req.params.id)\n  res.json(toUserDTO(row)) // toUserDTO is only ever used in this file\n}",
+          "after": "// routes/users.ts\nfunction toUserDTO(row: UserRow) {\n  return {\n    id: row.id,\n    name: row.full_name,\n    joinedAt: row.created_at.toISOString(),\n  }\n}\n\nexport async function getUser(req: Request, res: Response) {\n  const row = await db.users.findById(req.params.id)\n  res.json(toUserDTO(row)) // local helper; export only when a second module imports it\n}",
+          "why": "Shows keeping a single-use mapper file-local instead of exporting it speculatively, plus the TS form: top-level `function` over an exported arrow const (better stack traces/hoisting). When-NOT: getUser stays exported because the router genuinely imports it - that is the module's real contract, so do not hide it.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "Data-access package exports an internal row scanner",
+          "url": "",
+          "before": "package store\n\n// ScanOrder is only called inside this package.\nfunc ScanOrder(r *sql.Row) (Order, error) {\n\tvar o Order\n\treturn o, r.Scan(&o.ID, &o.TotalCents)\n}\n\nfunc GetOrder(db *sql.DB, id string) (Order, error) {\n\treturn ScanOrder(db.QueryRow(\n\t\t\"select id, total_cents from orders where id = $1\", id))\n}",
+          "after": "package store\n\nfunc scanOrder(r *sql.Row) (Order, error) {\n\tvar o Order\n\treturn o, r.Scan(&o.ID, &o.TotalCents)\n}\n\n// GetOrder is the package's entry point; callers import only this.\nfunc GetOrder(db *sql.DB, id string) (Order, error) {\n\treturn scanOrder(db.QueryRow(\n\t\t\"select id, total_cents from orders where id = $1\", id))\n}",
+          "why": "Uses Go's capitalization-based visibility: the row scanner is unexported (lower-case) since nothing outside the package uses it, narrowing the package surface to GetOrder. When-NOT: GetOrder remains exported as the deliberate package contract - do not unexport symbols other packages legitimately consume just to chase minimalism.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "ETL config module leaks its parsing helper into the public API",
+          "url": "",
+          "before": "# etl/config.py\ndef parse_duration(raw: str) -> int:   # used only below\n    return int(raw.rstrip(\"s\"))\n\ndef load_config(path: str) -> Config:\n    data = json.loads(Path(path).read_text())\n    return Config(timeout=parse_duration(data[\"timeout\"]))",
+          "after": "# etl/config.py\n__all__ = [\"load_config\"]\n\ndef _parse_duration(raw: str) -> int:  # underscore: not part of the module's API\n    return int(raw.rstrip(\"s\"))\n\ndef load_config(path: str) -> Config:\n    data = json.loads(Path(path).read_text())\n    return Config(timeout=_parse_duration(data[\"timeout\"]))",
+          "why": "Uses Python's conventions (leading underscore + `__all__`) to keep a single-use helper out of the module's public surface, signalling callers should not depend on it. When-NOT: load_config stays public (no underscore, listed in __all__) because it is the documented contract other modules import - do not underscore-hide symbols that are genuinely consumed elsewhere.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Spec source: /home/markmarosi/projects/engineer/research/data/ruleset.json principle id \"minimal-public-surface\" (lines 455-467); theme C7 in /home/markmarosi/projects/engineer/research/brief.md (lines 167-173). The rule's only cited source is the VS Code Coding Guidelines.\n\nAll three pairs are kind=\"synthetic\": realistic, idiomatic backend snippets I authored. I did not cite a repo because I could not produce a verified, fetchable permalink for this specific refactor pattern, and the honesty rules make synthetic preferable to a fabricated citation.\n\nCoverage: one pair per language (TS/Go/Python), each exercising that language's actual visibility mechanism - TS export + the function-vs-arrow-const style note, Go capitalization, Python underscore + __all__. Each pair embeds the when_not guard by keeping the genuine public entry point exported (getUser / GetOrder / load_config) so the examples model \"narrow the speculative surface\" rather than \"hide everything.\" The TS pair intentionally also illustrates the language-specific tip from the principle (`function foo()` over `export const foo = () => {}`)."
+    },
+    {
+      "principle_id": "explain-change-rationale-in-commit",
+      "examples": [
+        {
+          "language": "go",
+          "kind": "sourced",
+          "title": "vague 'Fix bug' vs imperative summary + rationale body",
+          "url": "https://google.github.io/eng-practices/review/developer/cl-descriptions.html",
+          "before": "// commit subject for the RPC server freelist change:\nFix bug",
+          "after": "RPC: Remove size limit on RPC server message freelist.\n\nServers like FizzBuzz have very large messages and would benefit from\nreuse. Make the freelist larger, and add a goroutine that frees the\nfreelist entries slowly over time, so that idle servers eventually\nrelease all freelist entries.",
+          "why": "Shows the exact anti-pattern this rule replaces: 'Fix bug' carries zero information, while the good message leads with an imperative one-line summary and a body explaining the problem (large messages, reuse) and the chosen approach (bigger freelist + a goroutine that drains it). When-NOT guard: this is a non-trivial functionality change, so the body earns its keep; a typo or version bump would need only the summary line, not this much prose.",
+          "verify_hint": "On the linked Google eng-practices CL-descriptions page, confirm 'Fix bug' appears verbatim in the list of bad first-line examples, and the full 'RPC: Remove size limit on RPC server message freelist.' message (with the FizzBuzz / 'add a goroutine that frees the freelist entries slowly over time' body) appears verbatim as a good functionality-change example. The leading '//' comment line is editorial scenario context, not from the page.",
+          "verify_note": "Fetched https://google.github.io/eng-practices/review/developer/cl-descriptions.html. Confirmed 'Fix bug' appears verbatim as an inadequate/bad CL description example. Also confirmed the full good functionality-change example appears verbatim: 'RPC: Remove size limit on RPC server message freelist.' followed by the body 'Servers like FizzBuzz have very large messages and would benefit from reuse. Make the freelist larger, and add a goroutine that frees the freelist entries slowly over time, so that idle servers eventually release all freelist entries.' The leading '//' line is editorial scenario framing, not claimed to be from the page."
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "nightly ETL batch-size change: 'update' vs why-it-changed",
+          "url": "",
+          "before": "# diff: BATCH_SIZE = 1000 -> 200 in nightly_export.py\ngit commit -m \"update\"",
+          "after": "# diff: BATCH_SIZE = 1000 -> 200 in nightly_export.py\ngit commit -m \"Lower nightly export batch size 1000 -> 200\n\nThe analytics replica OOM-killed the export whenever a batch held a few\nrows with large JSON blobs (P99 payload ~8MB). 200 keeps peak memory\nunder the 512MB cgroup limit with margin; throughput is unaffected\nsince the job is I/O-bound on the replica read (INC-744).\"",
+          "why": "Demonstrates explaining WHY a magic-number tweak was made: the diff shows 1000->200, but only the body explains the OOM cause, why 200 specifically (cgroup limit), and that throughput is safe, plus the incident link. When-NOT guard: the body is justified because the number alone looks arbitrary and risky; a self-evident change (e.g. fixing a typo'd constant name) would not warrant this and padding it would be ceremony.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "checkout API status-code fix: 'Fix checkout' vs problem + approach",
+          "url": "",
+          "before": "// PR title for handlers/checkout.ts change\nFix checkout",
+          "after": "// PR title + body for handlers/checkout.ts change\nReturn 409 (not 500) for duplicate idempotency keys\n\nMobile clients retry on network timeout and replay the same\nIdempotency-Key. We inserted, hit the unique constraint, and surfaced a\n500 \u2014 which the client treats as fatal and shows an error to users who\nwere in fact already charged. Map the constraint violation to 409 so the\nclient treats the replay as success. (FUNNEL-1290)",
+          "why": "Shows a PR description that states the user-facing problem (duplicate retries -> false error after a successful charge) and the chosen approach (map the constraint violation to 409), which the one-line diff cannot convey, versus the contentless 'Fix checkout'. When-NOT guard: appropriate because the reasoning isn't reconstructable from the diff alone \u2014 it is not an instruction to write a body for every commit; trivial mechanical PRs still need only the imperative summary.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Principle is about commit/PR descriptions, so 'language' is somewhat nominal \u2014 each example ties the message to a backend code change in that language for concreteness (Go RPC server, Python ETL export, TS checkout handler). The Go example is sourced from the Google eng-practices CL-descriptions page (the rule's own cited source), which contains BOTH the verbatim bad 'Fix bug' first-line and the verbatim good 'RPC: Remove size limit on RPC server message freelist' message; it is a published style-guide example, not an actual repo commit, but both halves are verbatim and fetchable at the URL, so I tagged it sourced with a scoping verify_hint. The two synthetic examples are realistic illustrative pairs (not attributed to any repo). Each 'why' bakes in the when_not guard (mechanical/self-evident changes need only the summary line; don't pad with ceremony) so the examples model appropriate expressiveness rather than 'always write a long body'."
+    },
+    {
+      "principle_id": "di-and-frameworks-by-need",
+      "examples": [
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "NestJS @Injectable service that only forwards to a repo",
+          "url": "",
+          "before": "@Injectable()\nexport class UserService {\n  constructor(\n    @Inject('USER_REPO') private readonly repo: UserRepository,\n  ) {}\n\n  findById(id: string): Promise<User | null> {\n    return this.repo.findOne({ where: { id } });\n  }\n}\n\n@Module({\n  providers: [\n    UserService,\n    { provide: 'USER_REPO', useClass: UserRepository },\n  ],\n  exports: [UserService],\n})\nexport class UserModule {}",
+          "after": "export function getUser(db: Db, id: string): Promise<User | null> {\n  return db.query.users.findFirst({ where: eq(users.id, id) });\n}",
+          "why": "Shows that a one-method service whose only job is to forward to a repo does not need @Injectable/@Module/@Inject token wiring: a plain function taking db explicitly is testable (pass a fake db) and needs no container to boot. When-NOT: in a large multi-team Nest codebase already standardized on modules/providers with lifecycle hooks, a lone plain function fights the grain - match the existing DI convention there.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "dependency-injector container for a trivial DB fetch",
+          "url": "",
+          "before": "from dependency_injector import containers, providers\n\nclass UserService:\n    def __init__(self, db: Database) -> None:\n        self._db = db\n\n    def get(self, user_id: int) -> User | None:\n        return self._db.fetch_one(\n            users.select().where(users.c.id == user_id))\n\nclass Container(containers.DeclarativeContainer):\n    config = providers.Configuration()\n    db = providers.Singleton(Database, url=config.db_url)\n    user_service = providers.Factory(UserService, db=db)",
+          "after": "def get_user(db: Database, user_id: int) -> User | None:\n    return db.fetch_one(\n        users.select().where(users.c.id == user_id))",
+          "why": "Demonstrates dropping a DeclarativeContainer + Singleton/Factory wiring for a function that just needs the db handle passed in; tests call it with a stub db, no container bootstrap. When-NOT: if the app already standardizes on dependency-injector, or genuinely has many cross-cutting singletons with managed lifecycles, match that wiring instead of introducing a one-off bare function.",
+          "verify_hint": ""
+        },
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "uber-fx provider graph vs explicit wiring in main",
+          "url": "",
+          "before": "func main() {\n    fx.New(\n        fx.Provide(loadConfig, openDB, newUserStore, newServer),\n        fx.Invoke(startServer),\n    ).Run()\n}\n\nfunc newUserStore(db *sql.DB) *UserStore { return &UserStore{db: db} }\nfunc newServer(s *UserStore, cfg *Config) *http.Server { /* routes */ }",
+          "after": "func main() {\n    cfg := loadConfig()\n    db := mustOpenDB(cfg.DSN)\n    defer db.Close()\n\n    srv := newServer(&UserStore{db: db}, cfg)\n    log.Fatal(srv.ListenAndServe())\n}",
+          "why": "Shows explicit construction in main reading top-to-bottom and being trivially debuggable, versus an fx provider graph resolved by reflection at runtime; for a handful of deps the container hides more than it helps. When-NOT: a large service with dozens of providers, OnStart/OnStop lifecycle hooks, and many teams can justify fx/wire - keep it where that wiring already pays off.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "Source: /home/markmarosi/projects/engineer/research/data/ruleset.json principle id \"di-and-frameworks-by-need\" (contested=true). All three examples are synthetic and idiomatic; none attributed to a repo. Rationale for synthetic over sourced: this is a design-default judgment whose teaching contrast (DI framework wiring -> plain function with explicit deps) rarely appears as a single verifiable line-anchored public diff, so per the honesty rules I avoided shaky citations. The ruleset's own canonical example is the TS/NestJS case; my TS pair mirrors that anti-pattern (and uses Drizzle's eq/findFirst as the clean form, matching the ruleset's \"after\"). Python uses the real dependency-injector API surface (DeclarativeContainer/Singleton/Factory) as the bad pole; Go uses uber-fx (fx.Provide/fx.Invoke) as the bad pole and idiomatic explicit-main wiring as the clean pole. Each \"why\" guards the when_not pole (existing DI-standardized codebase or large multi-team scale where the container earns its keep), so the examples model appropriate use rather than blanket anti-DI minimalism. Languages covered: python, typescript, go (full corpus coverage)."
+    },
+    {
+      "principle_id": "useful-defaults-and-zero-values",
+      "examples": [
+        {
+          "language": "go",
+          "kind": "synthetic",
+          "title": "value mutex makes the zero value usable; drop the constructor",
+          "url": "",
+          "before": "type Counter struct {\n    mu    *sync.Mutex\n    count int\n}\n\nfunc NewCounter() *Counter {\n    return &Counter{mu: &sync.Mutex{}}\n}\n\nfunc (c *Counter) Inc() {\n    c.mu.Lock()\n    defer c.mu.Unlock()\n    c.count++\n}\n// callers must remember: c := NewCounter()",
+          "after": "type Counter struct {\n    mu    sync.Mutex // zero value is an unlocked mutex; no constructor needed\n    count int\n}\n\n// usable directly: var c Counter; c.Inc()\nfunc (c *Counter) Inc() {\n    c.mu.Lock()\n    defer c.mu.Unlock()\n    c.count++\n}",
+          "why": "Shows the Go idiom of embedding sync.Mutex by value so the struct's zero value is ready and the NewCounter ceremony disappears. when_not: this only works because mutex and int zero values are valid; a struct holding a map still needs explicit init (a nil map panics on write), so don't blanket-delete constructors for fields whose zero value is unusable.",
+          "verify_hint": ""
+        },
+        {
+          "language": "python",
+          "kind": "synthetic",
+          "title": "default_factory empties remove None-guards in total()",
+          "url": "",
+          "before": "class Cart:\n    def __init__(self, items=None, discounts=None):\n        if items is None:\n            items = []\n        self.items = items\n        self.discounts = discounts  # may be None\n\n    def total(self):\n        subtotal = sum(i.price for i in self.items)\n        if self.discounts is None:\n            return subtotal\n        return subtotal - sum(self.discounts)",
+          "after": "@dataclass\nclass Cart:\n    items: list[Item] = field(default_factory=list)\n    discounts: list[Decimal] = field(default_factory=list)\n\n    def total(self) -> Decimal:\n        subtotal = sum((i.price for i in self.items), Decimal(0))\n        return subtotal - sum(self.discounts, Decimal(0))",
+          "why": "Demonstrates empty-but-usable collections via field(default_factory=list) so the common path needs no None sentinel and total() drops its is-None branch. when_not: this is safe only because 'no discounts' is semantically identical to an empty list; for a field where unset must differ from a real zero (an optional applied_coupon, or an as-yet-unpriced item) keep Optional/None rather than collapsing the distinction.",
+          "verify_hint": ""
+        },
+        {
+          "language": "typescript",
+          "kind": "synthetic",
+          "title": "return empty array instead of null so callers skip the guard",
+          "url": "",
+          "before": "function getTags(post: Post): string[] | null {\n  if (!post.tags || post.tags.length === 0) {\n    return null;\n  }\n  return post.tags;\n}\n\n// every caller must guard:\nconst tags = getTags(post);\nif (tags !== null) {\n  for (const tag of tags) index(tag);\n}",
+          "after": "function getTags(post: Post): string[] {\n  return post.tags ?? []; // empty-but-usable; callers never null-check\n}\n\n// caller just iterates:\nfor (const tag of getTags(post)) index(tag);",
+          "why": "Shows returning a useful zero value (an empty array) so the iterate-tags common case needs no null branch at any call site. when_not: collapse to [] only when 'no tags field present' and 'explicitly empty tags' should be treated the same; if a caller genuinely must distinguish absent vs empty (e.g. PATCH semantics, or 'never fetched' vs 'fetched, none'), keep the nullable return.",
+          "verify_hint": ""
+        }
+      ],
+      "notes": "All three pairs are synthetic. The principle's spec and canonical before/after (Go `var buf *bytes.Buffer; if buf == nil {...}` -> `var buf bytes.Buffer`) come from research/data/ruleset.json (principle id \"useful-defaults-and-zero-values\", lines ~497-508), citing go-proverbs.github.io and go.dev/doc/effective_go. I constructed the \"before\" anti-patterns myself, so per the honesty rules I did not attribute any pair to a repo and marked all kind=synthetic with empty URLs. I deliberately avoided reusing the ruleset's bytes.Buffer snippet verbatim; the Go example instead targets the \"mandatory constructor boilerplate\" half of the `replaces` clause (value sync.Mutex zero value, no NewCounter). Python and TypeScript carry the transferable judgment (default_factory empties; empty-array-not-null), and each `why` explicitly guards the when_not pole (unset vs legitimate-zero distinction) so the pairs model appropriate expressiveness rather than reflexively erasing meaningful absence. Coverage: go + python + typescript. I did not chase a sourced diff because a clean, fetchable real-repo before->after for this specific zero-value refactor is hard to verify, and a synthetic pair is preferred over an unverifiable citation. Spec file read: /home/markmarosi/projects/engineer/research/data/ruleset.json; theme context: /home/markmarosi/projects/engineer/research/brief.md (rule E2)."
+    }
+  ],
+  "stats": {
+    "principles": 32,
+    "examples": 96,
+    "by_language": {
+      "python": 32,
+      "typescript": 33,
+      "go": 31
+    },
+    "by_kind": {
+      "synthetic": 90,
+      "sourced": 6
+    },
+    "sourced_kept": 6
+  }
+}
