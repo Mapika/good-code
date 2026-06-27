@@ -129,7 +129,7 @@ Most rules transfer; a few bind to language:
 
 ## Building something new (greenfield)
 
-No neighbours to match, and an open-ended "build a system" prompt is where models pile up scaffolding. Two rules:
+No neighbours to match, and an open-ended "build a system" prompt is where models pile up scaffolding. Three rules:
 
 **Default to functions over data; make every type earn its place.** For each class, ABC/Protocol, interface, Enum, or exception subtype, state its justification in one line — its mutable state, its uniform dispatcher, its second caller, or the caller that branches on it. If you can't, downgrade: class→function over a dataclass/dict, Enum→string literals + an exhaustive check, exception subtype→one error type, ABC→plain functions.
 
@@ -140,6 +140,8 @@ No neighbours to match, and an open-ended "build a system" prompt is where model
 - 3+ real variants with divergent state **do** get modelled (union/enum + exhaustive handling, or polymorphism) — that's concrete, not premature;
 - it isn't one God function — cohesion still sets size;
 - names stay descriptive; set one set of conventions in the first files and stay internally consistent.
+
+**Match structure to size and certainty.** A small, well-specified program with a handful of independent branches is often clearest and *most correct* as one linear flow — get that version working before splitting it into a handler/dispatch layer or per-branch functions. Reach for the seam when shared cross-cutting logic, a growing surface, or real divergent state makes the flat form repeat or sprawl; not merely because each branch is nameable. _Not:_ cramming genuinely divergent concerns or a large/growing surface into one God function — when the seam earns its keep (a dispatch map, handlers, real polymorphism), build it.
 
 ## Before you finish an edit
 

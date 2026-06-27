@@ -64,9 +64,19 @@ attribution.
 
 ## Status
 
-v0.2.0. Evaluated with a skill-vs-no-skill A/B (same model per arm; a blind judge from a
-different model family). Directional, small-scale, LLM-judged — not proof — but consistent:
-the skill was judged at least as maintainable in every comparison, never regressed correctness,
-and never overcorrected into cryptic/under-built code. Its largest effect is curbing structural
-over-abstraction on open-ended / greenfield tasks; on precisely-specified tasks it acts as mild
-craftsmanship polish. Honest limitations: small N, LLM (not human) judge, mostly single-file tasks.
+v0.3.0. Evaluated with skill-vs-no-skill A/B tests (same model per arm; blind judge from a
+different model family). Directional, small-scale, LLM-judged — not proof.
+
+**Where it helps (measured):** on open-ended / greenfield tasks it curbs structural
+over-abstraction (e.g. an "implement a notification system" prompt: roughly halved class count and
+~40% fewer lines on a weak model), stays correctness-safe, is judged more maintainable, and
+generalizes to held-out tasks without overcorrecting into cryptic / under-built code.
+
+**Where it doesn't (also measured, honestly):** on *precisely-specified* tasks (a ticket with exact
+behavior), models write direct code regardless and the skill changes little. A behavior-gated
+extend/fix test showed no measurable extensibility gain at small scale, and the
+maintainability-at-scale claim is not reachable with such tasks. v0.3 softens a v0.2 "structure
+tax" where the skill could nudge a weak model into more structure than a small precise task needs.
+
+**Use it for:** vague / greenfield backend work, refactors, and "clean this up" requests.
+Limitations: small N, LLM (not human) judge, single-file tasks.

@@ -1,7 +1,7 @@
 {
   "name": "good-code",
   "displayName": "Good Code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Teaches appropriately-expressive backend code (Python/TS/Go): when to comment, abstract, validate, and handle errors. Every rule has a when-NOT guard, so it fixes LLM over-commenting and over-abstraction without overcorrecting into cryptic code. Bundles real before/after examples and a code-quality tripwire scanner.",
   "author": {
     "name": "Mark Marosi",
